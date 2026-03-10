@@ -271,7 +271,7 @@ void loop() {
         ESP.restart();
       }
     }
-    delay(1000 / FX_FPS);
+    FastLED.delay(1000 / FX_FPS);
     return;
   }
 
@@ -297,5 +297,5 @@ void loop() {
     saveSettingsIfChanged();
   }
 
-  delay(1000 / FX_FPS);
+  FastLED.delay(1000 / FX_FPS);
 }

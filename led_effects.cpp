@@ -63,11 +63,27 @@ void fx_paletteBreathe() {
 // ============ 103: 烛光摇曳 ============
 // Speed=摇曳频率  Param1=色温(暖黄→暖白)  Param2=摇曳幅度
 void fx_candle() {
-  uint16_t noiseSpeed = map(effectSpeed, 0, 255, 8, 2);
-  uint8_t noiseVal = inoise8(millis() / noiseSpeed, 12345);
-  uint8_t amplitude = map(effectParam2, 0, 255, 30, 180);
+  uint16_t t = millis();
+  uint8_t speedMul = map(effectSpeed, 0, 255, 1, 4);
+  uint8_t amplitude = map(effectParam2, 0, 255, 40, 180);
+
+  // 三层噪声叠加: 慢呼吸 + 中频抖动 + 快速闪烁
+  uint8_t slow  = inoise8(t / 6 * speedMul, 1000);       // 慢速起伏
+  uint8_t mid   = inoise8(t / 2 * speedMul, 5000);       // 中频抖动
+  uint8_t fast  = inoise8(t * speedMul, 9000);            // 快速闪烁
+
+  // 加权混合: 慢40% + 中35% + 快25%
+  uint16_t mixed = ((uint16_t)slow * 102 + (uint16_t)mid * 89 + (uint16_t)fast * 64) >> 8;
+
+  // 偶发骤降: ~6%概率出现明显暗闪 (模拟风吹)
+  uint8_t gustNoise = inoise8(t * 3, 30000);
+  if (gustNoise < 16) {
+    mixed = mixed * (uint16_t)(gustNoise + 4) / 20;  // 骤降到20%~100%
+  }
+
   uint8_t minBri = 255 - amplitude;
-  uint8_t bri = map(noiseVal, 0, 255, minBri, 255);
+  uint8_t bri = map(constrain(mixed, 0, 255), 0, 255, minBri, 255);
+
   // 色温: param1=0→暖黄(hue32,sat255), param1=255→暖白(hue40,sat100)
   uint8_t hue = map(effectParam1, 0, 255, 32, 40);
   uint8_t sat = map(effectParam1, 0, 255, 255, 100);
@@ -223,7 +239,9 @@ void fx_firefly() {
   if (brightness < target) brightness = qadd8(brightness, 3);
   else if (brightness > target) brightness = qsub8(brightness, 3);
   uint8_t hueRange = map(effectParam1, 0, 255, 0, 28);
-  uint8_t hue = 36 - random8(hueRange); // 暖黄基准 - 偏移(向橙色方向)
+  // 用慢速噪声替代random8，避免每帧色相剧烈跳变
+  uint8_t hueNoise = inoise8(millis() / 40, 9999);
+  uint8_t hue = 36 - scale8(hueNoise, hueRange); // 暖黄基准 - 平滑偏移(向橙色方向)
   if (brightness > 20) {
     fillSphere(hue, 200, brightness, 6);
   } else {
@@ -258,9 +276,18 @@ void fx_seasons() {
                                CHSV(160,80,255), CHSV(170,60,240), CHSV(140,40,200), CHSV(160,100,180));
     curPal = springPal;
   }
-  // 循环: 春→夏→秋→冬
-  uint16_t cycleTime = map(effectSpeed, 0, 255, 300, 8); // 秒/季
-  uint8_t season = (millis() / (cycleTime * 1000UL)) % 4;
+  // 循环: 春→夏→秋→冬 (基于累积时间，调速即时生效)
+  static unsigned long lastMs = 0;
+  static unsigned long accumMs = 0;
+  unsigned long nowMs = millis();
+  unsigned long deltaMs = nowMs - lastMs;
+  lastMs = nowMs;
+  if (deltaMs > 200) deltaMs = 200; // 防溢出
+  // speed 0→255 映射为每季 120s→5s
+  uint16_t cycleMs = map(effectSpeed, 0, 255, 120000, 5000);
+  accumMs += deltaMs;
+  if (accumMs >= cycleMs * 4UL) accumMs %= (cycleMs * 4UL);
+  uint8_t season = accumMs / cycleMs;
   CRGBPalette16 tgt;
   switch (season) {
     case 0: tgt = springPal; break;
