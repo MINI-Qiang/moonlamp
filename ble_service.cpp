@@ -4,10 +4,12 @@
 #include "time_service.h"
 #include "time_effect.h"
 #include "sun_calc.h"
+#include "ota_service.h"
 #include "esp_mac.h"
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
+#include <ArduinoJson.h>
 
 // ============ BLE回调 ============
 class ServerCallbacks : public BLEServerCallbacks {
@@ -170,6 +172,49 @@ class CTSTimeCallback : public BLECharacteristicCallbacks {
   }
 };
 
+// ============ OTA控制回调 ============
+class OtaCtrlCallback : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pChar) override {
+    String val = pChar->getValue();
+    if (val.length() < 1) return;
+    uint8_t cmd = (uint8_t)val[0];
+    switch (cmd) {
+      case 0x01:  // 手动检查更新
+        Serial.println("[BLE] OTA: 手动检查更新");
+        otaCheckNow();
+        break;
+      case 0x02:  // 确认开始升级
+        Serial.println("[BLE] OTA: 确认升级");
+        otaStartUpdate();
+        break;
+      case 0x03:  // 取消
+        Serial.println("[BLE] OTA: 取消");
+        otaCancelUpdate();
+        break;
+    }
+  }
+};
+
+class OtaInfoCallback : public BLECharacteristicCallbacks {
+  void onRead(BLECharacteristic *pChar) override {
+    JsonDocument doc;
+    doc["cur"] = getOtaCurrentVersion();
+    const OtaUpdateInfo &info = getOtaUpdateInfo();
+    if (info.available) {
+      doc["new"] = info.version;
+      doc["size"] = info.size;
+      doc["log"] = info.changelog;
+      doc["force"] = info.force;
+    } else {
+      doc["new"] = "";
+    }
+    doc["state"] = getOtaState();
+    String json;
+    serializeJson(doc, json);
+    pChar->setValue(json.c_str());
+  }
+};
+
 // ============ 生成BLE广播名称 ============
 static String makeBLEName() {
   uint8_t mac[6];
@@ -298,6 +343,29 @@ void setupBLE() {
     BLECharacteristic::PROPERTY_READ
   );
 
+  // ===== OTA更新服务 =====
+  BLEService *pOtaService = pServer->createService(OTA_SERVICE_UUID);
+
+  pCharOtaCtrl = pOtaService->createCharacteristic(
+    CHAR_OTA_CTRL_UUID,
+    BLECharacteristic::PROPERTY_WRITE |
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pCharOtaCtrl->setCallbacks(new OtaCtrlCallback());
+
+  pCharOtaInfo = pOtaService->createCharacteristic(
+    CHAR_OTA_INFO_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pCharOtaInfo->setCallbacks(new OtaInfoCallback());
+
+  pCharOtaProgress = pOtaService->createCharacteristic(
+    CHAR_OTA_PROGRESS_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+
   // ===== 同步初始值并启动所有服务 =====
   syncCharacteristics();
 
@@ -317,6 +385,7 @@ void setupBLE() {
   pWiFiService->start();
   pTimeService->start();
   pCTSService->start();
+  pOtaService->start();
 
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);

@@ -47,6 +47,21 @@
 // ============ 持久化 ============
 #define SAVE_CHECK_INTERVAL 300000  // 定时检查间隔: 5分钟 (ms)
 
+// ============ 固件版本 & OTA 配置 ============
+#define OTA_PROJECT_ID      "oakiot"           // 项目/客户标识
+#define OTA_PRODUCT_ID      "moon-light"        // 产品标识
+#define OTA_FW_VERSION      "1.0.0"            // 固件版本号
+#define OTA_HW_VERSION      "esp32c3-v1"       // 硬件版本
+#define OTA_BASE_URL        "https://ota.iot.oakiot.cc"
+#define OTA_CHECK_INTERVAL  86400000UL         // 自动检查间隔: 24小时 (ms)
+#define OTA_FIRST_DELAY     60000UL            // 首次检查延迟: 60秒 (ms)
+
+// ============ OTA BLE 服务 UUID ============
+#define OTA_SERVICE_UUID        "0000ff30-0000-1000-8000-00805f9b34fb"
+#define CHAR_OTA_CTRL_UUID      "0000ff31-0000-1000-8000-00805f9b34fb"
+#define CHAR_OTA_INFO_UUID      "0000ff32-0000-1000-8000-00805f9b34fb"
+#define CHAR_OTA_PROGRESS_UUID  "0000ff33-0000-1000-8000-00805f9b34fb"
+
 // ============ 全局状态 (extern声明) ============
 extern CRGB leds[];
 
@@ -80,5 +95,10 @@ extern BLECharacteristic *pCharTimeSync;
 // CTS标准时间特征值指针
 extern BLECharacteristic *pCharCTSTime;
 extern BLECharacteristic *pCharCTSLocal;
+
+// OTA BLE特征值指针
+extern BLECharacteristic *pCharOtaCtrl;
+extern BLECharacteristic *pCharOtaInfo;
+extern BLECharacteristic *pCharOtaProgress;
 
 #endif

@@ -11,6 +11,7 @@
  *   storage.h/cpp     - NVS持久化读写
  *   wifi_service.h/cpp - WiFi连接管理、BLE配网
  *   time_service.h/cpp - NTP时间同步、BLE授时
+ *   ota_service.h/cpp  - OTA远程固件更新
  *   ESP32_LED_TEST.ino - 全局变量定义 + setup/loop入口
  */
 
@@ -22,6 +23,7 @@
 #include "time_service.h"
 #include "time_effect.h"
 #include "sun_calc.h"
+#include "ota_service.h"
 #include <BLEDevice.h>
 #include <WiFiProv.h>
 #include <WiFi.h>
@@ -53,12 +55,31 @@ BLECharacteristic *pCharWiFiStatus = nullptr;
 BLECharacteristic *pCharTimeSync = nullptr;
 BLECharacteristic *pCharCTSTime = nullptr;
 BLECharacteristic *pCharCTSLocal = nullptr;
+BLECharacteristic *pCharOtaCtrl = nullptr;
+BLECharacteristic *pCharOtaInfo = nullptr;
+BLECharacteristic *pCharOtaProgress = nullptr;
 bool deviceConnected = false;
 bool needRestart     = false;
 bool provisioningMode = false;
 volatile bool needApplyLED = false;
 
 static unsigned long lastSaveCheckTime = 0;
+
+// ============ OTA BLE 状态回调 ============
+static void onOtaStateChange(uint8_t state, uint8_t progress) {
+  if (!deviceConnected) return;
+  // 通知 OTA Control 特征值（状态码）
+  if (pCharOtaCtrl) {
+    pCharOtaCtrl->setValue(&state, 1);
+    pCharOtaCtrl->notify();
+  }
+  // 通知 OTA Progress 特征值 [progress%, state]
+  if (pCharOtaProgress) {
+    uint8_t buf[2] = { progress, state };
+    pCharOtaProgress->setValue(buf, 2);
+    pCharOtaProgress->notify();
+  }
+}
 
 // ============ WiFiProv 事件回调 ============
 static void provisioningEvent(arduino_event_id_t event, arduino_event_info_t info) {
@@ -206,8 +227,11 @@ void setup() {
 
   // ====== 正常模式: 始终启动自定义 GATT 服务 ======
   provisioningMode = false;
-  initWiFiService();   // 有凭据则连WiFi，无凭据仅初始化等待BLE配网
+  initWiFiService();   // 有凭据则连 WiFi，无凭据仅初始化等待BLE配网
   initTimeService();
+  initOtaService();
+  otaSetStateCallback(onOtaStateChange);
+  otaConfirmIfNeeded();
   setupBLE();
   if (hasWiFiCredentials()) {
     Serial.println("[SYS] 正常模式 (WiFi已配置)");
@@ -244,6 +268,10 @@ static void handleSerialCommand(const String &line) {
     resp["device_name"] = String(DEVICE_PREFIX "_") + suffix;
     resp["prov_name"] = String("PROV_" DEVICE_PREFIX "_") + suffix;
     resp["provisioning"] = provisioningMode;
+    resp["project_id"] = OTA_PROJECT_ID;
+    resp["product_id"] = OTA_PRODUCT_ID;
+    resp["fw_version"] = OTA_FW_VERSION;
+    resp["hw_version"] = OTA_HW_VERSION;
   } else if (strcmp(action, "set_led") == 0) {
     uint8_t h = req["h"] | 0;
     uint8_t s = req["s"] | 255;
@@ -262,6 +290,36 @@ static void handleSerialCommand(const String &line) {
     resp["s"] = currentS;
     resp["v"] = currentV;
     resp["on"] = powerOn;
+  } else if (strcmp(action, "ota_check") == 0) {
+    otaCheckNow();
+    resp["resp"] = "ota_status";
+    resp["state"] = getOtaState();
+    resp["cur"] = OTA_FW_VERSION;
+    const OtaUpdateInfo &info = getOtaUpdateInfo();
+    if (info.available) {
+      resp["new"] = info.version;
+      resp["size"] = info.size;
+    }
+  } else if (strcmp(action, "ota_update") == 0) {
+    otaStartUpdate();
+    resp["resp"] = "ota_status";
+    resp["state"] = getOtaState();
+    resp["progress"] = getOtaProgress();
+  } else if (strcmp(action, "ota_status") == 0) {
+    resp["resp"] = "ota_status";
+    resp["state"] = getOtaState();
+    resp["progress"] = getOtaProgress();
+    resp["cur"] = OTA_FW_VERSION;
+    const OtaUpdateInfo &info = getOtaUpdateInfo();
+    if (info.available) {
+      resp["new"] = info.version;
+      resp["size"] = info.size;
+      resp["changelog"] = info.changelog;
+    }
+  } else if (strcmp(action, "ota_cancel") == 0) {
+    otaCancelUpdate();
+    resp["resp"] = "ota_status";
+    resp["state"] = getOtaState();
   } else {
     resp["resp"] = "error";
     resp["msg"] = String("unknown cmd: ") + action;
@@ -324,6 +382,7 @@ void loop() {
 
   loopWiFiService();
   loopTimeService();
+  loopOtaService(isWiFiConnected());
   syncWiFiTimeCharacteristics();
 
   unsigned long now = millis();
