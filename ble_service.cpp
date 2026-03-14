@@ -30,7 +30,7 @@ class HSVWriteCallback : public BLECharacteristicCallbacks {
       currentS = (uint8_t)val[1];
       currentV = (uint8_t)val[2];
       Serial.printf("[BLE] 收到HSV: H=%d S=%d V=%d\n", currentH, currentS, currentV);
-      applyLED();
+      needApplyLED = true;
       syncCharacteristics();
       if (deviceConnected) pCharHSV->notify();
     }
@@ -43,7 +43,7 @@ class PowerWriteCallback : public BLECharacteristicCallbacks {
     if (val.length() >= 1) {
       powerOn = ((uint8_t)val[0] != 0);
       Serial.printf("[BLE] 收到开关: %s\n", powerOn ? "开" : "关");
-      applyLED();
+      needApplyLED = true;
       syncCharacteristics();
       if (deviceConnected) pCharPower->notify();
     }
@@ -56,7 +56,7 @@ class EffectWriteCallback : public BLECharacteristicCallbacks {
     if (val.length() >= 1) {
       effectMode = (uint8_t)val[0];
       Serial.printf("[BLE] 收到灯效模式: %d\n", effectMode);
-      if (effectMode == 0) applyLED();
+      needApplyLED = true;
       syncCharacteristics();
       if (deviceConnected) pCharEffect->notify();
     }

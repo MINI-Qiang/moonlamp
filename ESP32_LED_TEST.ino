@@ -56,6 +56,7 @@ BLECharacteristic *pCharCTSLocal = nullptr;
 bool deviceConnected = false;
 bool needRestart     = false;
 bool provisioningMode = false;
+volatile bool needApplyLED = false;
 
 static unsigned long lastSaveCheckTime = 0;
 
@@ -175,33 +176,45 @@ void setup() {
   initTimeEffect();  // 初始化时间灯效系统
   applyLED();
 
-  // ====== 双模式启动 ======
-  if (hasWiFiCredentials()) {
-    // --- 正常模式: 已有WiFi凭据 ---
-    provisioningMode = false;
-    Serial.println("[SYS] 正常模式 (WiFi已配置)");
-    initWiFiService();
-    initTimeService();
-    setupBLE();
-    Serial.println("[SYS] 系统就绪，等待BLE连接...");
-  } else {
-    // --- 配网模式: WiFiProv Security1 ---
-    provisioningMode = true;
-    Serial.println("[SYS] 配网模式 (WiFiProv Security1 BLE)");
-    WiFi.onEvent(provisioningEvent);
-    String provName = makeProvName();
-    String provPoP = makeDevicePoP();
-    Serial.printf("[Prov] 配网设备名: %s\n", provName.c_str());
-    Serial.printf("[Prov] PoP 验证码: %s\n", provPoP.c_str());
-    WiFiProv.beginProvision(
-      PROV_TRANSPORT,
-      NETWORK_PROV_SCHEME_HANDLER_NONE,
-      NETWORK_PROV_SECURITY_1,
-      provPoP.c_str(),
-      provName.c_str()
-    );
-    Serial.println("[Prov] 等待手机/Web配网...");
+  // ====== 检查配网标志: 仅在 Web 端主动触发重置后才进入 WiFiProv ======
+  {
+    Preferences sysCfg;
+    sysCfg.begin("sys_cfg", false);
+    bool needProv = sysCfg.getBool("needProv", false);
+    if (needProv) {
+      sysCfg.putBool("needProv", false);  // 清除标志，避免循环
+      sysCfg.end();
+      provisioningMode = true;
+      Serial.println("[SYS] 安全配网模式 (WiFiProv Security1 BLE)");
+      WiFi.onEvent(provisioningEvent);
+      String provName = makeProvName();
+      String provPoP = makeDevicePoP();
+      Serial.printf("[Prov] 配网设备名: %s\n", provName.c_str());
+      Serial.printf("[Prov] PoP 验证码: %s\n", provPoP.c_str());
+      WiFiProv.beginProvision(
+        PROV_TRANSPORT,
+        NETWORK_PROV_SCHEME_HANDLER_NONE,
+        NETWORK_PROV_SECURITY_1,
+        provPoP.c_str(),
+        provName.c_str()
+      );
+      Serial.println("[Prov] 等待手机/Web配网...");
+      return;  // 配网模式不初始化自定义GATT
+    }
+    sysCfg.end();
   }
+
+  // ====== 正常模式: 始终启动自定义 GATT 服务 ======
+  provisioningMode = false;
+  initWiFiService();   // 有凭据则连WiFi，无凭据仅初始化等待BLE配网
+  initTimeService();
+  setupBLE();
+  if (hasWiFiCredentials()) {
+    Serial.println("[SYS] 正常模式 (WiFi已配置)");
+  } else {
+    Serial.println("[SYS] 正常模式 (WiFi未配置，等待BLE配网)");
+  }
+  Serial.println("[SYS] 系统就绪，等待BLE连接...");
 }
 
 // ============ 串口 JSON 命令处理 ============
@@ -231,6 +244,24 @@ static void handleSerialCommand(const String &line) {
     resp["device_name"] = String(DEVICE_PREFIX "_") + suffix;
     resp["prov_name"] = String("PROV_" DEVICE_PREFIX "_") + suffix;
     resp["provisioning"] = provisioningMode;
+  } else if (strcmp(action, "set_led") == 0) {
+    uint8_t h = req["h"] | 0;
+    uint8_t s = req["s"] | 255;
+    uint8_t v = req["v"] | 128;
+    bool on  = req["on"] | true;
+
+    currentH = h;
+    currentS = s;
+    currentV = v;
+    powerOn  = on;
+    effectMode = 0;  // 强制切到静态模式
+    applyLED();
+
+    resp["resp"] = "led_ok";
+    resp["h"] = currentH;
+    resp["s"] = currentS;
+    resp["v"] = currentV;
+    resp["on"] = powerOn;
   } else {
     resp["resp"] = "error";
     resp["msg"] = String("unknown cmd: ") + action;
@@ -258,10 +289,9 @@ static void pollSerial() {
 void loop() {
   pollSerial();
 
-  // 配网模式: 仅运行灯效，等待WiFiProv回调
+  // 安全配网模式: 仅运行灯效，等待WiFiProv回调
   if (provisioningMode) {
     if (effectMode == 1 || effectMode >= 100) updateEffect();
-    // 安全兜底: WiFi 已连接且凭据已桥接，但 PROV_END 未触发时主动重启
     static unsigned long provGotIpTime = 0;
     if (WiFi.status() == WL_CONNECTED) {
       if (provGotIpTime == 0) provGotIpTime = millis();
@@ -281,6 +311,11 @@ void loop() {
     BLEDevice::startAdvertising();
     Serial.println("[BLE] 重新开始广播");
     needRestart = false;
+  }
+
+  if (needApplyLED) {
+    needApplyLED = false;
+    applyLED();
   }
 
   if (effectMode == 1 || effectMode >= 100) {

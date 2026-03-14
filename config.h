@@ -62,6 +62,7 @@ extern uint8_t effectParam2;
 extern bool deviceConnected;
 extern bool needRestart;
 extern bool provisioningMode;
+extern volatile bool needApplyLED;
 
 // BLE特征值指针
 class BLECharacteristic;

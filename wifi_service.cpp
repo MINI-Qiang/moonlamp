@@ -151,8 +151,13 @@ bool hasWiFiCredentials() {
 }
 
 void enterProvisioningMode() {
-  Serial.println("[WiFi] 进入配网模式，清除凭据并重启...");
+  Serial.println("[WiFi] 进入安全配网模式，清除凭据并重启...");
   clearWiFiCredentials();
+  // 设置配网标志，重启后进入 WiFiProv 模式
+  Preferences pf;
+  pf.begin("sys_cfg", false);
+  pf.putBool("needProv", true);
+  pf.end();
   delay(500);
   ESP.restart();
 }
