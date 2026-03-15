@@ -1,10 +1,20 @@
 #include "config_manager.h"
 #include "config.h"
+#include "i18n.h"
 #include <Preferences.h>
 #include <ArduinoJson.h>
 
 static RuntimeConfig rtCfg;
 static Preferences cfgPrefs;
+
+// ============ i18n 实现 ============
+Lang getLang() {
+  return rtCfg.language;
+}
+
+void setLang(Lang lang) {
+  rtCfg.language = lang;
+}
 
 void initConfigManager() {
   cfgPrefs.begin("rt_cfg", false);
@@ -38,9 +48,12 @@ void initConfigManager() {
   rtCfg.httpEnabled = cfgPrefs.getBool("httpEn", false);
   rtCfg.httpPort    = cfgPrefs.getUShort("httpPort", 80);
 
+  // Language
+  rtCfg.language = (Lang)cfgPrefs.getUChar("lang", LANG_EN);
+
   cfgPrefs.end();
 
-  Serial.println("[CFG] 运行时配置已加载");
+  Serial.println("[CFG] Runtime config loaded");
 }
 
 RuntimeConfig& getRuntimeConfig() {
@@ -61,9 +74,10 @@ void saveRuntimeConfig() {
   cfgPrefs.putULong("otaFstD",  rtCfg.otaFirstDelay);
   cfgPrefs.putBool("httpEn",    rtCfg.httpEnabled);
   cfgPrefs.putUShort("httpPort", rtCfg.httpPort);
+  cfgPrefs.putUChar("lang",      (uint8_t)rtCfg.language);
 
   cfgPrefs.end();
-  Serial.println("[CFG] 运行时配置已保存");
+  Serial.println(TR("[CFG] Runtime config saved", "[CFG] 运行时配置已保存"));
 }
 
 String configToJson() {
@@ -95,6 +109,9 @@ String configToJson() {
   // HTTP
   doc["http_enabled"]      = rtCfg.httpEnabled;
   doc["http_port"]         = rtCfg.httpPort;
+
+  // Language
+  doc["language"]          = (rtCfg.language == LANG_ZH) ? "zh" : "en";
 
   String out;
   serializeJson(doc, out);
@@ -149,6 +166,11 @@ bool configFromJson(const String& json) {
   }
   if (doc.containsKey("http_port")) {
     rtCfg.httpPort = doc["http_port"];
+    changed = true;
+  }
+  if (doc.containsKey("language")) {
+    String lang = doc["language"] | "en";
+    rtCfg.language = (lang == "zh") ? LANG_ZH : LANG_EN;
     changed = true;
   }
 

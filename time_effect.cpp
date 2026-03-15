@@ -1,6 +1,7 @@
 #include "time_effect.h"
 #include "sun_calc.h"
 #include "time_service.h"
+#include "i18n.h"
 #include <Preferences.h>
 
 // ============ 全局配置 ============
@@ -24,7 +25,7 @@ static Preferences tePrefs;
 // ============ 配置管理 ============
 void initTimeEffect() {
   loadTimeEffectConfig();
-  Serial.println("[TimeEffect] 时间灯效系统初始化完成");
+  Serial.println(TR("[TimeEffect] System initialized", "[TimeEffect] 时间灯效系统初始化完成"));
 }
 
 TimeEffectConfig& getTimeEffectConfig() {
@@ -48,7 +49,7 @@ void saveTimeEffectConfig() {
   tePrefs.putUChar("fadeUp", teConfig.fadeUpDuration);
   tePrefs.putUChar("fadeDown", teConfig.fadeDownDuration);
   tePrefs.end();
-  Serial.println("[TimeEffect] 配置已保存");
+  Serial.println(TR("[TimeEffect] Config saved", "[TimeEffect] 配置已保存"));
 }
 
 void loadTimeEffectConfig() {
@@ -65,9 +66,11 @@ void loadTimeEffectConfig() {
   teConfig.fadeDownDuration = tePrefs.getUChar("fadeDown", 30);
   tePrefs.end();
   
-  Serial.printf("[TimeEffect] 配置已加载: H=%d S=%d maxV=%d nightV=%d\n",
+  Serial.printf(TR("[TimeEffect] Config loaded: H=%d S=%d maxV=%d nightV=%d\n",
+                "[TimeEffect] 配置已加载: H=%d S=%d maxV=%d nightV=%d\n"),
                 teConfig.hue, teConfig.saturation, teConfig.maxBrightness, teConfig.nightBrightness);
-  Serial.printf("[TimeEffect] 时间: start=%d peak=%d night=%d off=%d\n",
+  Serial.printf(TR("[TimeEffect] Times: start=%d peak=%d night=%d off=%d\n",
+                "[TimeEffect] 时间: start=%d peak=%d night=%d off=%d\n"),
                 teConfig.startTime, teConfig.peakTime, teConfig.nightTime, teConfig.offTime);
 }
 
@@ -154,7 +157,8 @@ void updateTimeEffect(uint8_t& h, uint8_t& s, uint8_t& v) {
   static int16_t lastLogMinute = -1;
   if (now != lastLogMinute) {
     lastLogMinute = now;
-    Serial.printf("[TimeEffect] 当前:%s 日出:%s 日落:%s 最亮:%s 夜灯:%s 关闭:%s\n",
+    Serial.printf(TR("[TimeEffect] Now:%s Sunrise:%s Sunset:%s Peak:%s Night:%s Off:%s\n",
+                  "[TimeEffect] 当前:%s 日出:%s 日落:%s 最亮:%s 夜灯:%s 关闭:%s\n"),
                   minutesToTimeStr(now).c_str(),
                   minutesToTimeStr(sunrise).c_str(),
                   minutesToTimeStr(sunset).c_str(),
@@ -226,16 +230,14 @@ uint8_t getTimeEffectPhase() {
 }
 
 const char* getTimeEffectPhaseName() {
-  static const char* names[] = {
-    "白天关闭",
-    "渐亮中",
-    "最亮",
-    "渐暗中",
-    "夜灯",
-    "夜间关闭"
+  static const char* namesEN[] = {
+    "Day Off", "Fading Up", "Peak", "Fading Down", "Night Light", "Night Off"
   };
-  if (currentPhase > 5) return "未知";
-  return names[currentPhase];
+  static const char* namesZH[] = {
+    "白天关闭", "渐亮中", "最亮", "渐暗中", "夜灯", "夜间关闭"
+  };
+  if (currentPhase > 5) return TR("Unknown", "未知");
+  return (getLang() == LANG_ZH) ? namesZH[currentPhase] : namesEN[currentPhase];
 }
 
 // ============ BLE 数据序列化 ============
@@ -270,9 +272,11 @@ bool deserializeTimeEffectConfig(const uint8_t* buf, size_t len) {
   teConfig.fadeUpDuration = buf[12];
   teConfig.fadeDownDuration = buf[13];
   
-  Serial.printf("[TimeEffect] BLE配置更新: H=%d S=%d maxV=%d nightV=%d\n",
+  Serial.printf(TR("[TimeEffect] BLE config update: H=%d S=%d maxV=%d nightV=%d\n",
+                "[TimeEffect] BLE配置更新: H=%d S=%d maxV=%d nightV=%d\n"),
                 teConfig.hue, teConfig.saturation, teConfig.maxBrightness, teConfig.nightBrightness);
-  Serial.printf("[TimeEffect] 时间: start=%d peak=%d night=%d off=%d fadeDown=%d\n",
+  Serial.printf(TR("[TimeEffect] Times: start=%d peak=%d night=%d off=%d fadeDown=%d\n",
+                "[TimeEffect] 时间: start=%d peak=%d night=%d off=%d fadeDown=%d\n"),
                 teConfig.startTime, teConfig.peakTime, teConfig.nightTime, teConfig.offTime, teConfig.fadeDownDuration);
   
   return true;

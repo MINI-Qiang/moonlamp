@@ -5,6 +5,7 @@
 #include "time_effect.h"
 #include "sun_calc.h"
 #include "ota_service.h"
+#include "i18n.h"
 #include "esp_mac.h"
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -15,12 +16,12 @@
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *s) override {
     deviceConnected = true;
-    Serial.println("[BLE] 客户端已连接");
+    Serial.println(TR("[BLE] Client connected", "[BLE] 客户端已连接"));
   }
   void onDisconnect(BLEServer *s) override {
     deviceConnected = false;
     needRestart = true;
-    Serial.println("[BLE] 客户端已断开");
+    Serial.println(TR("[BLE] Client disconnected", "[BLE] 客户端已断开"));
   }
 };
 
@@ -31,7 +32,7 @@ class HSVWriteCallback : public BLECharacteristicCallbacks {
       currentH = (uint8_t)val[0];
       currentS = (uint8_t)val[1];
       currentV = (uint8_t)val[2];
-      Serial.printf("[BLE] 收到HSV: H=%d S=%d V=%d\n", currentH, currentS, currentV);
+      Serial.printf(TR("[BLE] HSV received: H=%d S=%d V=%d\n", "[BLE] 收到HSV: H=%d S=%d V=%d\n"), currentH, currentS, currentV);
       needApplyLED = true;
       syncCharacteristics();
       if (deviceConnected) pCharHSV->notify();
@@ -44,7 +45,7 @@ class PowerWriteCallback : public BLECharacteristicCallbacks {
     String val = pChar->getValue();
     if (val.length() >= 1) {
       powerOn = ((uint8_t)val[0] != 0);
-      Serial.printf("[BLE] 收到开关: %s\n", powerOn ? "开" : "关");
+      Serial.printf(TR("[BLE] Power: %s\n", "[BLE] 收到开关: %s\n"), powerOn ? TR("ON", "开") : TR("OFF", "关"));
       needApplyLED = true;
       syncCharacteristics();
       if (deviceConnected) pCharPower->notify();
@@ -57,7 +58,7 @@ class EffectWriteCallback : public BLECharacteristicCallbacks {
     String val = pChar->getValue();
     if (val.length() >= 1) {
       effectMode = (uint8_t)val[0];
-      Serial.printf("[BLE] 收到灯效模式: %d\n", effectMode);
+      Serial.printf(TR("[BLE] Effect mode: %d\n", "[BLE] 收到灯效模式: %d\n"), effectMode);
       needApplyLED = true;
       syncCharacteristics();
       if (deviceConnected) pCharEffect->notify();
@@ -71,7 +72,7 @@ class ParamWriteCallback : public BLECharacteristicCallbacks {
     if (val.length() >= 1) effectSpeed = (uint8_t)val[0];
     if (val.length() >= 2) effectParam1 = (uint8_t)val[1];
     if (val.length() >= 3) effectParam2 = (uint8_t)val[2];
-    Serial.printf("[BLE] 收到灯效参数: Speed=%d P1=%d P2=%d\n", effectSpeed, effectParam1, effectParam2);
+    Serial.printf(TR("[BLE] Effect params: Speed=%d P1=%d P2=%d\n", "[BLE] 收到灯效参数: Speed=%d P1=%d P2=%d\n"), effectSpeed, effectParam1, effectParam2);
     syncCharacteristics();
     if (deviceConnected) pCharParam->notify();
   }
@@ -105,19 +106,19 @@ class WiFiCfgCallback : public BLECharacteristicCallbacks {
     String val = pChar->getValue();
     // 写入单字节 0x00 → 进入安全配网模式（清除凭据+重启）
     if (val.length() == 1 && (uint8_t)val[0] == 0x00) {
-      Serial.println("[BLE] 收到重新配网请求");
+      Serial.println(TR("[BLE] Re-provision request received", "[BLE] 收到重新配网请求"));
       enterProvisioningMode();
       return;
     }
     int sep = val.indexOf('\n');
     if (sep <= 0) {
-      Serial.println("[BLE] WiFi配置格式错误 (需要 SSID\\nPASSWORD)");
+      Serial.println(TR("[BLE] WiFi config format error (need SSID\\nPASSWORD)", "[BLE] WiFi配置格式错误 (需要 SSID\\nPASSWORD)"));
       return;
     }
     String ssid = val.substring(0, sep);
     String pass = (sep + 1 < (int)val.length()) ? val.substring(sep + 1) : "";
     if (setWiFiCredentials(ssid, pass)) {
-      Serial.printf("[BLE] WiFi配置已更新: SSID=%s\n", ssid.c_str());
+      Serial.printf(TR("[BLE] WiFi config updated: SSID=%s\n", "[BLE] WiFi配置已更新: SSID=%s\n"), ssid.c_str());
     }
   }
 };
@@ -180,15 +181,15 @@ class OtaCtrlCallback : public BLECharacteristicCallbacks {
     uint8_t cmd = (uint8_t)val[0];
     switch (cmd) {
       case 0x01:  // 手动检查更新
-        Serial.println("[BLE] OTA: 手动检查更新");
+        Serial.println(TR("[BLE] OTA: Manual check", "[BLE] OTA: 手动检查更新"));
         otaCheckNow();
         break;
       case 0x02:  // 确认开始升级
-        Serial.println("[BLE] OTA: 确认升级");
+        Serial.println(TR("[BLE] OTA: Confirm update", "[BLE] OTA: 确认升级"));
         otaStartUpdate();
         break;
       case 0x03:  // 取消
-        Serial.println("[BLE] OTA: 取消");
+        Serial.println(TR("[BLE] OTA: Cancel", "[BLE] OTA: 取消"));
         otaCancelUpdate();
         break;
     }
@@ -251,7 +252,7 @@ void syncWiFiTimeCharacteristics() {
 // ============ 初始化BLE ============
 void setupBLE() {
   String bleName = makeBLEName();
-  Serial.printf("[BLE] 广播名称: %s\n", bleName.c_str());
+  Serial.printf(TR("[BLE] Advertising name: %s\n", "[BLE] 广播名称: %s\n"), bleName.c_str());
 
   BLEDevice::init(bleName.c_str());
   BLEServer *pServer = BLEDevice::createServer();

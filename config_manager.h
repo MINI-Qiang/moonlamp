@@ -22,9 +22,13 @@
  */
 
 #include <Arduino.h>
+#include "i18n.h"
 
 // ============ 运行时配置结构 ============
 struct RuntimeConfig {
+  // 语言
+  Lang language;            // 串口输出语言, 默认 LANG_EN
+
   // NTP
   char ntpServer1[64];
   char ntpServer2[64];

@@ -1,5 +1,6 @@
 #include "time_service.h"
 #include "config_manager.h"
+#include "i18n.h"
 #include "wifi_service.h"
 #include <ESP32Time.h>
 #include <esp_sntp.h>
@@ -22,13 +23,13 @@ static void ntpSyncCallback(struct timeval *tv) {
     timeSynced = true;
     ntpPending = false;
     lastNTPSync = millis();
-    Serial.printf("[Time] NTP异步同步成功: %s\n", rtc.getDateTime().c_str());
+    Serial.printf(TR("[Time] NTP sync OK: %s\n", "[Time] NTP异步同步成功: %s\n"), rtc.getDateTime().c_str());
   }
 }
 
 void initTimeService() {
   esp_sntp_set_time_sync_notification_cb(ntpSyncCallback);
-  Serial.println("[Time] 时间服务初始化 (异步NTP)");
+  Serial.println(TR("[Time] Time service init (async NTP)", "[Time] 时间服务初始化 (异步NTP)"));
 }
 
 void loopTimeService() {
@@ -43,7 +44,7 @@ void loopTimeService() {
   // 每日定时重新同步
   if (connected && timeSynced && !ntpPending) {
     if (millis() - lastNTPSync >= NTP_SYNC_INTERVAL_MS) {
-      Serial.println("[Time] 每日NTP定时同步");
+      Serial.println(TR("[Time] Daily NTP resync", "[Time] 每日NTP定时同步"));
       syncNTP();
     }
   }
@@ -51,16 +52,16 @@ void loopTimeService() {
 
 bool syncNTP() {
   if (!isWiFiConnected()) {
-    Serial.println("[Time] NTP同步跳过: WiFi未连接");
+    Serial.println(TR("[Time] NTP skip: WiFi not connected", "[Time] NTP同步跳过: WiFi未连接"));
     return false;
   }
 
   if (ntpPending) {
-    Serial.println("[Time] NTP同步已在进行中");
+    Serial.println(TR("[Time] NTP sync already in progress", "[Time] NTP同步已在进行中"));
     return false;
   }
 
-  Serial.println("[Time] 发起NTP异步同步...");
+  Serial.println(TR("[Time] NTP async sync request sent...", "[Time] 发起NTP异步同步..."));
   ntpPending = true;
 
   // 如已初始化SNTP，先停止再重新启动以触发新的同步
@@ -77,7 +78,7 @@ bool syncNTP() {
 void setTimeFromEpoch(unsigned long epoch) {
   rtc.setTime(epoch);
   timeSynced = true;
-  Serial.printf("[Time] BLE授时成功: %s\n", rtc.getDateTime().c_str());
+  Serial.printf(TR("[Time] BLE time set: %s\n", "[Time] BLE授时成功: %s\n"), rtc.getDateTime().c_str());
 }
 
 unsigned long getEpochTime() {
@@ -136,7 +137,8 @@ bool parseCTSCurrentTime(const uint8_t *buf, size_t len) {
   t.tm_sec  = sec;
   rtc.setTimeStruct(t);
   timeSynced = true;
-  Serial.printf("[Time] CTS授时成功: %04d-%02d-%02d %02d:%02d:%02d\n", year, month, day, hour, min, sec);
+  Serial.printf(TR("[Time] CTS time set: %04d-%02d-%02d %02d:%02d:%02d\n",
+                "[Time] CTS授时成功: %04d-%02d-%02d %02d:%02d:%02d\n"), year, month, day, hour, min, sec);
   return true;
 }
 

@@ -26,6 +26,7 @@
 #include "ota_service.h"
 #include "config_manager.h"
 #include "http_service.h"
+#include "i18n.h"
 #include <BLEDevice.h>
 #include <WiFiProv.h>
 #include <WiFi.h>
@@ -125,12 +126,12 @@ static void onOtaLedIndicator(uint8_t state, uint8_t progress) {
 static void provisioningEvent(arduino_event_id_t event, arduino_event_info_t info) {
   switch (event) {
     case ARDUINO_EVENT_PROV_START:
-      Serial.println("[Prov] 配网服务已启动");
+      Serial.println(TR("[Prov] Provisioning started", "[Prov] 配网服务已启动"));
       break;
     case ARDUINO_EVENT_PROV_CRED_RECV: {
       const char *ssid = (const char *)info.prov_cred_recv.ssid;
       const char *pass = (const char *)info.prov_cred_recv.password;
-      Serial.printf("[Prov] 收到WiFi凭据: SSID=%s\n", ssid);
+      Serial.printf(TR("[Prov] WiFi cred received: SSID=%s\n", "[Prov] 收到WiFi凭据: SSID=%s\n"), ssid);
       // 桥接保存到 wifi_cfg 命名空间，使重启后 hasWiFiCredentials()=true
       // WiFiProv 将凭据存在 ESP-IDF 内部 NVS，与 wifi_cfg 不同步
       Preferences provPrefs;
@@ -141,7 +142,7 @@ static void provisioningEvent(arduino_event_id_t event, arduino_event_info_t inf
       break;
     }
     case ARDUINO_EVENT_PROV_CRED_FAIL:
-      Serial.println("[Prov] WiFi凭据验证失败");
+      Serial.println(TR("[Prov] WiFi credential failed", "[Prov] WiFi凭据验证失败"));
       {
         Preferences provPrefs;
         provPrefs.begin("wifi_cfg", false);
@@ -151,15 +152,15 @@ static void provisioningEvent(arduino_event_id_t event, arduino_event_info_t inf
       }
       break;
     case ARDUINO_EVENT_PROV_CRED_SUCCESS:
-      Serial.println("[Prov] WiFi连接成功");
+      Serial.println(TR("[Prov] WiFi connected", "[Prov] WiFi连接成功"));
       break;
     case ARDUINO_EVENT_PROV_END:
-      Serial.println("[Prov] 配网完成，即将重启进入正常模式...");
+      Serial.println(TR("[Prov] Done, rebooting to normal mode...", "[Prov] 配网完成，即将重启进入正常模式..."));
       delay(1000);
       ESP.restart();
       break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-      Serial.printf("[WiFi] 已获取IP: %s\n",
+      Serial.printf(TR("[WiFi] Got IP: %s\n", "[WiFi] 已获取IP: %s\n"),
                     IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
       // 配网模式下，WiFiProv 可能复用 IDF 内部 NVS 旧凭据自动连接（不触发 PROV_CRED_RECV）
       // 必须将凭据桥接到 wifi_cfg，否则重启后又进入配网模式死循环
@@ -172,20 +173,20 @@ static void provisioningEvent(arduino_event_id_t event, arduino_event_info_t inf
               strlen((const char *)conf.sta.ssid) > 0) {
             bp.putString("ssid", (const char *)conf.sta.ssid);
             bp.putString("pass", (const char *)conf.sta.password);
-            Serial.printf("[Prov] 已桥接WiFi凭据: SSID=%s\n", (const char *)conf.sta.ssid);
+            Serial.printf(TR("[Prov] Bridged WiFi cred: SSID=%s\n", "[Prov] 已桥接WiFi凭据: SSID=%s\n"), (const char *)conf.sta.ssid);
           }
         }
         bp.end();
       }
       break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
-      Serial.println("[WiFi] STA 已连接到AP");
+      Serial.println(TR("[WiFi] STA connected to AP", "[WiFi] STA 已连接到AP"));
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      Serial.printf("[WiFi] STA 断开 (reason=%d)\n", info.wifi_sta_disconnected.reason);
+      Serial.printf(TR("[WiFi] STA disconnected (reason=%d)\n", "[WiFi] STA 断开 (reason=%d)\n"), info.wifi_sta_disconnected.reason);
       break;
     case ARDUINO_EVENT_WIFI_STA_START:
-      Serial.println("[WiFi] STA 启动");
+      Serial.println(TR("[WiFi] STA started", "[WiFi] STA 启动"));
       break;
   }
 }
@@ -225,9 +226,9 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n========================================");
-  Serial.println("ESP32 WS2812 BLE灯光控制 + WiFi/NTP");
+  Serial.println(TR("ESP32 WS2812 BLE LED Control + WiFi/NTP", "ESP32 WS2812 BLE灯光控制 + WiFi/NTP"));
   Serial.println("========================================");
-  Serial.printf("[LED] 引脚: GPIO%d, 数量: %d颗\n", LED_PIN, NUM_LEDS);
+  Serial.printf(TR("[LED] Pin: GPIO%d, Count: %d\n", "[LED] 引脚: GPIO%d, 数量: %d颗\n"), LED_PIN, NUM_LEDS);
 
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(255);
@@ -240,7 +241,7 @@ void setup() {
 
   // ====== 检查 OTA 重启更新标志 ======
   if (otaHasPendingUpdate()) {
-    Serial.println("[SYS] 检测到 OTA 更新标志，进入固件下载模式");
+    Serial.println(TR("[SYS] OTA update flag detected, entering firmware download mode", "[SYS] 检测到 OTA 更新标志，进入固件下载模式"));
     otaSetStateCallback(onOtaLedIndicator);
     initWiFiService();
     // 等待 WiFi 连接（最长 30 秒），需调用 loopWiFiService 驱动状态机
@@ -266,9 +267,9 @@ void setup() {
         }
         delay(300);
       }
-      Serial.println("[OTA] 下载失败，继续正常启动");
+      Serial.println(TR("[OTA] Download failed, continuing normal boot", "[OTA] 下载失败，继续正常启动"));
     } else {
-      Serial.println("[OTA] WiFi 连接超时，继续正常启动");
+      Serial.println(TR("[OTA] WiFi timeout, continuing normal boot", "[OTA] WiFi 连接超时，继续正常启动"));
       // 红色三闪×2
       for (int g = 0; g < 2; g++) {
         for (int i = 0; i < 3; i++) {
@@ -293,12 +294,12 @@ void setup() {
       sysCfg.putBool("needProv", false);  // 清除标志，避免循环
       sysCfg.end();
       provisioningMode = true;
-      Serial.println("[SYS] 安全配网模式 (WiFiProv Security1 BLE)");
+      Serial.println(TR("[SYS] Secure provisioning mode (WiFiProv Security1 BLE)", "[SYS] 安全配网模式 (WiFiProv Security1 BLE)"));
       WiFi.onEvent(provisioningEvent);
       String provName = makeProvName();
       String provPoP = makeDevicePoP();
-      Serial.printf("[Prov] 配网设备名: %s\n", provName.c_str());
-      Serial.printf("[Prov] PoP 验证码: %s\n", provPoP.c_str());
+      Serial.printf(TR("[Prov] Device name: %s\n", "[Prov] 配网设备名: %s\n"), provName.c_str());
+      Serial.printf(TR("[Prov] PoP code: %s\n", "[Prov] PoP 验证码: %s\n"), provPoP.c_str());
       WiFiProv.beginProvision(
         PROV_TRANSPORT,
         NETWORK_PROV_SCHEME_HANDLER_NONE,
@@ -306,7 +307,7 @@ void setup() {
         provPoP.c_str(),
         provName.c_str()
       );
-      Serial.println("[Prov] 等待手机/Web配网...");
+      Serial.println(TR("[Prov] Waiting for phone/Web provisioning...", "[Prov] 等待手机/Web配网..."));
       return;  // 配网模式不初始化自定义GATT
     }
     sysCfg.end();
@@ -322,11 +323,11 @@ void setup() {
   setupBLE();
   initHttpService();  // HTTP 局域网配置服务 (根据 httpEnabled 决定是否启动)
   if (hasWiFiCredentials()) {
-    Serial.println("[SYS] 正常模式 (WiFi已配置)");
+    Serial.println(TR("[SYS] Normal mode (WiFi configured)", "[SYS] 正常模式 (WiFi已配置)"));
   } else {
-    Serial.println("[SYS] 正常模式 (WiFi未配置，等待BLE配网)");
+    Serial.println(TR("[SYS] Normal mode (WiFi not configured, waiting for BLE)", "[SYS] 正常模式 (WiFi未配置，等待BLE配网)"));
   }
-  Serial.println("[SYS] 系统就绪，等待BLE连接...");
+  Serial.println(TR("[SYS] System ready, waiting for BLE connection...", "[SYS] 系统就绪，等待BLE连接..."));
 }
 
 // ============ 串口 JSON 命令处理 ============
@@ -519,6 +520,18 @@ static void handleSerialCommand(const String &line) {
     resp["port"]    = rtCfg.httpPort;
     resp["running"] = isHttpServiceRunning();
 
+  // ============ 语言切换 ============
+  } else if (strcmp(action, "set_lang") == 0) {
+    const char* lang = req["lang"] | "";
+    if (strcmp(lang, "zh") == 0) {
+      setLang(LANG_ZH);
+    } else {
+      setLang(LANG_EN);
+    }
+    saveRuntimeConfig();
+    resp["resp"] = "lang_ok";
+    resp["language"] = (getLang() == LANG_ZH) ? "zh" : "en";
+
   // ============ 设备综合状态 ============
   } else if (strcmp(action, "get_status") == 0) {
     uint8_t mac[6];
@@ -575,7 +588,7 @@ void loop() {
     if (WiFi.status() == WL_CONNECTED) {
       if (provGotIpTime == 0) provGotIpTime = millis();
       if (millis() - provGotIpTime > 3000 && hasWiFiCredentials()) {
-        Serial.println("[Prov] WiFi已就绪，重启进入正常模式...");
+        Serial.println(TR("[Prov] WiFi ready, rebooting to normal mode...", "[Prov] WiFi已就绪，重启进入正常模式..."));
         delay(500);
         ESP.restart();
       }
@@ -588,7 +601,7 @@ void loop() {
   if (needRestart) {
     delay(500);
     BLEDevice::startAdvertising();
-    Serial.println("[BLE] 重新开始广播");
+    Serial.println(TR("[BLE] Restarting advertising", "[BLE] 重新开始广播"));
     needRestart = false;
   }
 

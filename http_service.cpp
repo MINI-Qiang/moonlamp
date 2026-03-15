@@ -1,6 +1,7 @@
 #include "http_service.h"
 #include "config.h"
 #include "config_manager.h"
+#include "i18n.h"
 #include "wifi_service.h"
 #include "time_service.h"
 #include "time_effect.h"
@@ -283,7 +284,7 @@ void initHttpService() {
 void startHttpService() {
   if (running) return;
   if (!isWiFiConnected()) {
-    Serial.println("[HTTP] WiFi 未连接，无法启动 HTTP 服务");
+    Serial.println(TR("[HTTP] WiFi not connected, cannot start", "[HTTP] WiFi 未连接，无法启动 HTTP 服务"));
     return;
   }
 
@@ -330,7 +331,8 @@ void startHttpService() {
 
   server->begin();
   running = true;
-  Serial.printf("[HTTP] 服务已启动 (端口 %d, IP %s)\n",
+  Serial.printf(TR("[HTTP] Service started (port %d, IP %s)\n",
+                "[HTTP] 服务已启动 (端口 %d, IP %s)\n"),
                 cfg.httpPort, WiFi.localIP().toString().c_str());
 }
 
@@ -340,7 +342,7 @@ void stopHttpService() {
   delete server;
   server = nullptr;
   running = false;
-  Serial.println("[HTTP] 服务已停止");
+  Serial.println(TR("[HTTP] Service stopped", "[HTTP] 服务已停止"));
 }
 
 void loopHttpService() {

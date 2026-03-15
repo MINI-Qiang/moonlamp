@@ -1,4 +1,5 @@
 #include "storage.h"
+#include "i18n.h"
 #include <Preferences.h>
 
 static Preferences prefs;
@@ -29,7 +30,8 @@ void loadSettings() {
   savedH = currentH; savedS = currentS; savedV = currentV; savedPower = powerOn;
   savedEffectMode = effectMode; savedEffectSpeed = effectSpeed;
   savedParam1 = effectParam1; savedParam2 = effectParam2;
-  Serial.printf("[NVS] 已加载: H=%d S=%d V=%d Power=%d FX=%d Speed=%d P1=%d P2=%d\n",
+  Serial.printf(TR("[NVS] Loaded: H=%d S=%d V=%d Power=%d FX=%d Speed=%d P1=%d P2=%d\n",
+                "[NVS] 已加载: H=%d S=%d V=%d Power=%d FX=%d Speed=%d P1=%d P2=%d\n"),
                 currentH, currentS, currentV, powerOn, effectMode, effectSpeed, effectParam1, effectParam2);
 }
 
@@ -50,6 +52,7 @@ void saveSettingsIfChanged() {
   savedH = currentH; savedS = currentS; savedV = currentV; savedPower = powerOn;
   savedEffectMode = effectMode; savedEffectSpeed = effectSpeed;
   savedParam1 = effectParam1; savedParam2 = effectParam2;
-  Serial.printf("[NVS] 设置已保存: H=%d S=%d V=%d Power=%d FX=%d Speed=%d P1=%d P2=%d\n",
+  Serial.printf(TR("[NVS] Saved: H=%d S=%d V=%d Power=%d FX=%d Speed=%d P1=%d P2=%d\n",
+                "[NVS] 设置已保存: H=%d S=%d V=%d Power=%d FX=%d Speed=%d P1=%d P2=%d\n"),
                 currentH, currentS, currentV, powerOn, effectMode, effectSpeed, effectParam1, effectParam2);
 }

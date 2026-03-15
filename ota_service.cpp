@@ -10,6 +10,7 @@
 #include "config.h"       // ← 项目配置（定义 OTA_* 宏），移植时替换为目标项目的配置头
 #include "ota_service.h"
 #include "config_manager.h"
+#include "i18n.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -60,7 +61,7 @@ static String getDeviceMAC() {
 static void setState(uint8_t newState) {
   if (otaState != newState) {
     otaState = newState;
-    Serial.printf("[OTA] 状态: 0x%02X\n", newState);
+    Serial.printf(TR("[OTA] State: 0x%02X\n", "[OTA] 状态: 0x%02X\n"), newState);
     if (stateCallback) {
       stateCallback(otaState, otaProgress);
     }
@@ -166,7 +167,7 @@ static void doCheckUpdate() {
   http.setTimeout(15000);
 
   int httpCode = http.POST(reqBody);
-  Serial.printf("[OTA] 检查更新: HTTP %d\n", httpCode);
+  Serial.printf(TR("[OTA] Check update: HTTP %d\n", "[OTA] 检查更新: HTTP %d\n"), httpCode);
 
   if (httpCode != 200) {
     http.end();
@@ -191,7 +192,7 @@ static void doCheckUpdate() {
 
   bool hasUpdate = respDoc["update"] | false;
   if (!hasUpdate) {
-    Serial.println("[OTA] 已是最新版本");
+    Serial.println(TR("[OTA] Already up to date", "[OTA] 已是最新版本"));
     updateInfo.available = false;
     clearUpdateInfoNVS();
     setState(OTA_NO_UPDATE);
@@ -205,7 +206,8 @@ static void doCheckUpdate() {
   
   // 客户端侧二次确认版本确实更新（防止服务端逻辑异常）
   if (!isVersionNewer(newVersion, String(OTA_FW_VERSION))) {
-    Serial.printf("[OTA] 服务端返回版本 %s 不高于当前 %s，忽略\n", 
+    Serial.printf(TR("[OTA] Server version %s not newer than %s, ignoring\n",
+                  "[OTA] 服务端返回版本 %s 不高于当前 %s，忽略\n"), 
                   newVersion.c_str(), OTA_FW_VERSION);
     setState(OTA_NO_UPDATE);
     delay(100);
@@ -221,10 +223,11 @@ static void doCheckUpdate() {
   updateInfo.size      = respDoc["size"] | 0;
   updateInfo.force     = respDoc["force"] | false;
 
-  Serial.printf("[OTA] 发现新版本: %s → %s (%u 字节)\n",
+  Serial.printf(TR("[OTA] New version found: %s -> %s (%u bytes)\n",
+                "[OTA] 发现新版本: %s → %s (%u 字节)\n"),
                 OTA_FW_VERSION, updateInfo.version.c_str(), updateInfo.size);
   if (updateInfo.changelog.length() > 0) {
-    Serial.printf("[OTA] 更新日志: %s\n", updateInfo.changelog.c_str());
+    Serial.printf(TR("[OTA] Changelog: %s\n", "[OTA] 更新日志: %s\n"), updateInfo.changelog.c_str());
   }
 
   // 持久化到 NVS
@@ -242,7 +245,7 @@ static void doDownloadAndFlash() {
     return;
   }
 
-  Serial.printf("[OTA] 开始下载: %s\n", updateInfo.url.c_str());
+  Serial.printf(TR("[OTA] Downloading: %s\n", "[OTA] 开始下载: %s\n"), updateInfo.url.c_str());
 
   // 初始化 OTA Update
   if (updateInfo.md5.length() == 32) {
@@ -251,7 +254,7 @@ static void doDownloadAndFlash() {
 
   uint32_t maxSketchSize = (updateInfo.size > 0) ? updateInfo.size : UPDATE_SIZE_UNKNOWN;
   if (!Update.begin(maxSketchSize)) {
-    Serial.printf("[OTA] Update.begin 失败: %s\n", Update.errorString());
+    Serial.printf(TR("[OTA] Update.begin failed: %s\n", "[OTA] Update.begin 失败: %s\n"), Update.errorString());
     setError(OTA_ERR_FLASH);
     return;
   }
@@ -266,7 +269,7 @@ static void doDownloadAndFlash() {
 
   int httpCode = http.GET();
   if (httpCode != 200) {
-    Serial.printf("[OTA] 下载失败: HTTP %d\n", httpCode);
+    Serial.printf(TR("[OTA] Download failed: HTTP %d\n", "[OTA] 下载失败: HTTP %d\n"), httpCode);
     Update.abort();
     http.end();
     setError(OTA_ERR_DOWNLOAD);
@@ -288,7 +291,7 @@ static void doDownloadAndFlash() {
       if (readBytes > 0) {
         size_t writeResult = Update.write(buf, readBytes);
         if (writeResult != (size_t)readBytes) {
-          Serial.printf("[OTA] Flash 写入失败 (wrote %d/%d)\n", (int)writeResult, readBytes);
+          Serial.printf(TR("[OTA] Flash write failed (wrote %d/%d)\n", "[OTA] Flash 写入失败 (wrote %d/%d)\n"), (int)writeResult, readBytes);
           Update.abort();
           http.end();
           setError(OTA_ERR_FLASH);
@@ -303,7 +306,7 @@ static void doDownloadAndFlash() {
             lastReportedPct = pct;
             setProgress(pct);
             if (pct % 10 == 0) {
-              Serial.printf("[OTA] 下载进度: %d%%\n", pct);
+              Serial.printf(TR("[OTA] Download: %d%%\n", "[OTA] 下载进度: %d%%\n"), pct);
             }
           }
         }
@@ -317,12 +320,12 @@ static void doDownloadAndFlash() {
   // 校验并完成
   setState(OTA_VERIFYING);
   if (!Update.end(true)) {
-    Serial.printf("[OTA] 校验失败: %s\n", Update.errorString());
+    Serial.printf(TR("[OTA] Verify failed: %s\n", "[OTA] 校验失败: %s\n"), Update.errorString());
     setError(OTA_ERR_MD5);
     return;
   }
 
-  Serial.println("[OTA] 固件写入完成，校验通过");
+  Serial.println(TR("[OTA] Firmware written, verified OK", "[OTA] 固件写入完成，校验通过"));
   setProgress(100);
   setState(OTA_READY);
 
@@ -332,7 +335,7 @@ static void doDownloadAndFlash() {
   // 上报成功（尽力而为，不阻塞）
   reportResult("update_success");
 
-  Serial.println("[OTA] 即将重启...");
+  Serial.println(TR("[OTA] Rebooting...", "[OTA] 即将重启..."));
   setState(OTA_REBOOTING);
   delay(1000);
   ESP.restart();
@@ -362,7 +365,7 @@ static void reportResult(const char* event) {
   int code = http.POST(body);
   http.end();
 
-  Serial.printf("[OTA] 上报 %s: HTTP %d\n", event, code);
+  Serial.printf(TR("[OTA] Report %s: HTTP %d\n", "[OTA] 上报 %s: HTTP %d\n"), event, code);
 }
 
 // ============ 公开接口实现 ============
@@ -387,10 +390,10 @@ void initOtaService() {
   // 尝试从 NVS 恢复上次检查到的更新信息
   loadUpdateInfoFromNVS();
   if (updateInfo.available) {
-    Serial.printf("[OTA] 恢复待更新: %s → %s\n", OTA_FW_VERSION, updateInfo.version.c_str());
+    Serial.printf(TR("[OTA] Resuming pending update: %s -> %s\n", "[OTA] 恢复待更新: %s → %s\n"), OTA_FW_VERSION, updateInfo.version.c_str());
     // 再次验证版本（可能已经通过 OTA 升级到该版本了）
     if (!isVersionNewer(updateInfo.version, String(OTA_FW_VERSION))) {
-      Serial.println("[OTA] 已更新到该版本，清除");
+      Serial.println(TR("[OTA] Already at this version, clearing", "[OTA] 已更新到该版本，清除"));
       updateInfo.available = false;
       clearUpdateInfoNVS();
     } else {
@@ -398,7 +401,8 @@ void initOtaService() {
     }
   }
 
-  Serial.printf("[OTA] 服务初始化 (项目:%s 产品:%s 硬件:%s 固件:%s)\n",
+  Serial.printf(TR("[OTA] Service init (project:%s product:%s hw:%s fw:%s)\n",
+                "[OTA] 服务初始化 (项目:%s 产品:%s 硬件:%s 固件:%s)\n"),
                 OTA_PROJECT_ID, OTA_PRODUCT_ID, OTA_HW_VERSION, OTA_FW_VERSION);
 }
 
@@ -427,7 +431,7 @@ void loopOtaService(bool wifiConnected) {
     p.begin("ota_cfg", false);
     p.putBool("doUpdate", true);
     p.end();
-    Serial.println("[OTA] 已设置更新标志，即将重启...");
+    Serial.println(TR("[OTA] Update flag set, rebooting...", "[OTA] 已设置更新标志，即将重启..."));
     setState(OTA_REBOOTING);
     delay(500);
     ESP.restart();
@@ -456,11 +460,11 @@ void loopOtaService(bool wifiConnected) {
 
 void otaCheckNow() {
   if (otaState == OTA_DOWNLOADING || otaState == OTA_VERIFYING || otaState == OTA_REBOOTING) {
-    Serial.println("[OTA] 正在更新中，无法重复检查");
+    Serial.println(TR("[OTA] Update in progress, cannot check again", "[OTA] 正在更新中，无法重复检查"));
     return;
   }
   if (!wifiReady) {
-    Serial.println("[OTA] WiFi 未连接，无法检查更新");
+    Serial.println(TR("[OTA] WiFi not connected, cannot check", "[OTA] WiFi 未连接，无法检查更新"));
     setError(OTA_ERR_NO_WIFI);
     return;
   }
@@ -470,16 +474,16 @@ void otaCheckNow() {
 
 void otaStartUpdate() {
   if (otaState != OTA_AVAILABLE) {
-    Serial.println("[OTA] 无可用更新");
+    Serial.println(TR("[OTA] No update available", "[OTA] 无可用更新"));
     return;
   }
   if (updateInfo.url.isEmpty()) {
-    Serial.println("[OTA] 更新 URL 为空");
+    Serial.println(TR("[OTA] Update URL is empty", "[OTA] 更新 URL 为空"));
     setError(OTA_ERR_DOWNLOAD);
     return;
   }
   if (!wifiReady) {
-    Serial.println("[OTA] WiFi 未连接，无法开始更新");
+    Serial.println(TR("[OTA] WiFi not connected, cannot update", "[OTA] WiFi 未连接，无法开始更新"));
     setError(OTA_ERR_NO_WIFI);
     return;
   }
@@ -491,14 +495,14 @@ void otaStartUpdate() {
 
 void otaCancelUpdate() {
   if (otaState == OTA_DOWNLOADING || otaState == OTA_VERIFYING || otaState == OTA_REBOOTING) {
-    Serial.println("[OTA] 正在写入中，无法取消");
+    Serial.println(TR("[OTA] Writing in progress, cannot cancel", "[OTA] 正在写入中，无法取消"));
     return;
   }
   updateInfo.available = false;
   clearUpdateInfoNVS();
   otaProgress = 0;
   setState(OTA_IDLE);
-  Serial.println("[OTA] 已取消");
+  Serial.println(TR("[OTA] Cancelled", "[OTA] 已取消"));
 }
 
 uint8_t getOtaState() {
@@ -525,12 +529,14 @@ void otaConfirmIfNeeded() {
   if (esp_ota_get_state_partition(running, &imgState) == ESP_OK) {
     if (imgState == ESP_OTA_IMG_PENDING_VERIFY) {
       esp_ota_mark_app_valid_cancel_rollback();
-      Serial.printf("[OTA] 新固件 %s 验证通过，已确认分区\n", OTA_FW_VERSION);
+      Serial.printf(TR("[OTA] New firmware %s verified, partition confirmed\n",
+                    "[OTA] 新固件 %s 验证通过，已确认分区\n"), OTA_FW_VERSION);
       // 上报成功（WiFi 可能还没连接，延迟到 loop 中处理）
     }
   }
 
-  Serial.printf("[OTA] 运行分区: %s (地址: 0x%06X)\n",
+  Serial.printf(TR("[OTA] Running partition: %s (addr: 0x%06X)\n",
+                "[OTA] 运行分区: %s (地址: 0x%06X)\n"),
                 running->label, (unsigned int)running->address);
 }
 
@@ -555,13 +561,15 @@ void otaRunPendingUpdate() {
   initOtaService();
 
   if (!updateInfo.available || updateInfo.url.isEmpty()) {
-    Serial.println("[OTA] 无有效的更新信息，正常启动");
+    Serial.println(TR("[OTA] No valid update info, normal boot", "[OTA] 无有效的更新信息，正常启动"));
     return;
   }
 
-  Serial.printf("[OTA] 重启后 OTA 模式: %s -> %s\n",
+  Serial.printf(TR("[OTA] Post-reboot OTA mode: %s -> %s\n",
+                "[OTA] 重启后 OTA 模式: %s -> %s\n"),
                 OTA_FW_VERSION, updateInfo.version.c_str());
-  Serial.printf("[OTA] 可用堆: %u 字节（无 BLE 开销）\n", ESP.getFreeHeap());
+  Serial.printf(TR("[OTA] Free heap: %u bytes (no BLE overhead)\n",
+                "[OTA] 可用堆: %u 字节（无 BLE 开销）\n"), ESP.getFreeHeap());
 
   doDownloadAndFlash();
   // 成功则 ESP.restart()，失败则 return 由调用方继续正常启动

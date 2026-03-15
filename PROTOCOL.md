@@ -1043,6 +1043,7 @@ Read 或 Notify 时返回 UTF-8 JSON 字符串：
 | `ota_hw_version`       | string  | 否   | 硬件版本 (编译时常量)          |
 | `http_enabled`         | boolean | 是   | HTTP 服务开关                  |
 | `http_port`            | number  | 是   | HTTP 服务端口                  |
+| `language`             | string  | 是   | 串口语言 ("en" / "zh")         |
 
 #### `set_config` — 修改运行时配置
 
@@ -1201,6 +1202,27 @@ Read 或 Notify 时返回 UTF-8 JSON 字符串：
 ```json
 {"cmd":"set_http","enabled":false}
 ```
+
+---
+
+#### `set_lang` — 切换串口输出语言
+
+**请求（切换为中文）:**
+```json
+{"cmd":"set_lang","lang":"zh"}
+```
+
+**请求（切换为英文，默认）:**
+```json
+{"cmd":"set_lang","lang":"en"}
+```
+
+**响应:**
+```json
+{"resp":"lang_ok","language":"zh"}
+```
+
+> 语言偏好保存在 NVS，重启后保持。也可通过 `set_config` 修改：`{"cmd":"set_config","language":"zh"}`
 
 ---
 
@@ -1431,5 +1453,6 @@ requests.put(f"http://{DEVICE_IP}/api/config",
 | OTA URL/间隔     | —           | set_config    | PUT /api/config |
 | OTA 检查/升级    | 0xff31      | ota_check等   | POST /api/ota/* |
 | HTTP 服务开关    | —           | set_http      | PUT /api/config |
+| 串口语言         | —           | set_lang      | PUT /api/config |
 | 设备信息         | OTA Info    | get_device_info | GET /api/status |
 ```

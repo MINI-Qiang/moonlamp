@@ -1,4 +1,5 @@
 #include "wifi_service.h"
+#include "i18n.h"
 #include <WiFi.h>
 #include <Preferences.h>
 #include "esp_wifi.h"
@@ -36,7 +37,7 @@ static void configPowerSave() {
   
   const char* modeStr = (currentPowerMode == WIFI_PS_MAX_MODEM) ? "MAX_MODEM" :
                         (currentPowerMode == WIFI_PS_MIN_MODEM) ? "MIN_MODEM" : "NONE";
-  Serial.printf("[WiFi] 省电模式: %s, 监听间隔: %d\n", modeStr, WIFI_LISTEN_INTERVAL);
+  Serial.printf(TR("[WiFi] Power save: %s, Listen interval: %d\n", "[WiFi] 省电模式: %s, 监听间隔: %d\n"), modeStr, WIFI_LISTEN_INTERVAL);
 }
 
 static void startConnect() {
@@ -45,7 +46,7 @@ static void startConnect() {
   connectStart = millis();
   WiFi.disconnect();
   WiFi.begin(storedSSID.c_str(), storedPass.c_str());
-  Serial.printf("[WiFi] 正在连接: %s\n", storedSSID.c_str());
+  Serial.printf(TR("[WiFi] Connecting: %s\n", "[WiFi] 正在连接: %s\n"), storedSSID.c_str());
 }
 
 void initWiFiService() {
@@ -60,10 +61,10 @@ void initWiFiService() {
   configPowerSave();
 
   if (storedSSID.length() > 0) {
-    Serial.printf("[WiFi] 已存储SSID: %s\n", storedSSID.c_str());
+    Serial.printf(TR("[WiFi] Stored SSID: %s\n", "[WiFi] 已存储SSID: %s\n"), storedSSID.c_str());
     startConnect();
   } else {
-    Serial.println("[WiFi] 无WiFi凭据，等待BLE配网");
+    Serial.println(TR("[WiFi] No credentials, waiting for BLE provisioning", "[WiFi] 无WiFi凭据，等待BLE配网"));
   }
 }
 
@@ -77,13 +78,13 @@ void loopWiFiService() {
     case WIFI_ST_CONNECTING:
       if (status == WL_CONNECTED) {
         wifiState = WIFI_ST_CONNECTED;
-        Serial.printf("[WiFi] 已连接! IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf(TR("[WiFi] Connected! IP: %s\n", "[WiFi] 已连接! IP: %s\n"), WiFi.localIP().toString().c_str());
         // 连接成功后重新应用省电配置
         configPowerSave();
       } else if (now - connectStart > WIFI_CONNECT_TIMEOUT) {
         wifiState = WIFI_ST_FAILED;
         lastReconnect = now;
-        Serial.println("[WiFi] 连接超时");
+        Serial.println(TR("[WiFi] Connection timeout", "[WiFi] 连接超时"));
       }
       break;
 
@@ -91,7 +92,7 @@ void loopWiFiService() {
       if (status != WL_CONNECTED) {
         wifiState = WIFI_ST_DISCONNECTED;
         lastReconnect = now;
-        Serial.println("[WiFi] 连接断开");
+        Serial.println(TR("[WiFi] Disconnected", "[WiFi] 连接断开"));
       }
       break;
 
@@ -111,7 +112,7 @@ bool setWiFiCredentials(const String &ssid, const String &password) {
   storedPass = password;
   wifiPrefs.putString("ssid", ssid);
   wifiPrefs.putString("pass", password);
-  Serial.printf("[WiFi] 凭据已保存: SSID=%s\n", ssid.c_str());
+  Serial.printf(TR("[WiFi] Credentials saved: SSID=%s\n", "[WiFi] 凭据已保存: SSID=%s\n"), ssid.c_str());
 
   startConnect();
   return true;
@@ -127,7 +128,7 @@ void clearWiFiCredentials() {
   esp_wifi_restore();
   WiFi.disconnect(true, true);
   wifiState = WIFI_ST_DISCONNECTED;
-  Serial.println("[WiFi] 凭据已清除(含ESP-IDF内部存储)");
+  Serial.println(TR("[WiFi] Credentials cleared (incl. ESP-IDF storage)", "[WiFi] 凭据已清除(含ESP-IDF内部存储)"));
 }
 
 uint8_t getWiFiStatus() {
@@ -151,7 +152,7 @@ bool hasWiFiCredentials() {
 }
 
 void enterProvisioningMode() {
-  Serial.println("[WiFi] 进入安全配网模式，清除凭据并重启...");
+  Serial.println(TR("[WiFi] Entering provisioning mode, clearing cred & rebooting...", "[WiFi] 进入安全配网模式，清除凭据并重启..."));
   clearWiFiCredentials();
   // 设置配网标志，重启后进入 WiFiProv 模式
   Preferences pf;

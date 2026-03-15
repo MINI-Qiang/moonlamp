@@ -1,5 +1,6 @@
 #include "sun_calc.h"
 #include "time_service.h"
+#include "i18n.h"
 #include <math.h>
 
 // 地理位置
@@ -13,7 +14,7 @@ static float sunLongitude = DEFAULT_LONGITUDE;
 void setSunLocation(float latitude, float longitude) {
   sunLatitude = latitude;
   sunLongitude = longitude;
-  Serial.printf("[Sun] 位置已更新: 纬度=%.2f, 经度=%.2f\n", latitude, longitude);
+  Serial.printf(TR("[Sun] Location updated: lat=%.2f, lon=%.2f\n", "[Sun] 位置已更新: 纬度=%.2f, 经度=%.2f\n"), latitude, longitude);
 }
 
 float getSunLatitude() { return sunLatitude; }
