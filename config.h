@@ -50,7 +50,7 @@
 // ============ 固件版本 & OTA 配置 ============
 #define OTA_PROJECT_ID      "oakiot"           // 项目/客户标识
 #define OTA_PRODUCT_ID      "moon-light"        // 产品标识
-#define OTA_FW_VERSION      "1.0.0"            // 固件版本号
+#define OTA_FW_VERSION      "1.0.1"            // 固件版本号
 #define OTA_HW_VERSION      "esp32c3-v1"       // 硬件版本
 #define OTA_BASE_URL        "https://ota.iot.oakiot.cc"
 #define OTA_CHECK_INTERVAL  86400000UL         // 自动检查间隔: 24小时 (ms)

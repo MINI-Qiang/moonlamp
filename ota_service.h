@@ -113,6 +113,13 @@ const char* getOtaCurrentVersion();
 // 获取可用更新信息（检查到更新后有效）
 const OtaUpdateInfo& getOtaUpdateInfo();
 
+// ============ 重启后 OTA 下载 ============
+// 检查 NVS 中是否有待执行的 OTA 更新（setup 中早期调用）
+bool otaHasPendingUpdate();
+
+// 执行待更新的固件下载（无 BLE 环境下调用，成功会重启）
+void otaRunPendingUpdate();
+
 // 启动后确认分区有效（防止回滚循环，在 setup 中调用）
 void otaConfirmIfNeeded();
 

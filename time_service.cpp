@@ -1,4 +1,5 @@
 #include "time_service.h"
+#include "config_manager.h"
 #include "wifi_service.h"
 #include <ESP32Time.h>
 #include <esp_sntp.h>
@@ -66,7 +67,8 @@ bool syncNTP() {
   if (sntpInitialized) {
     esp_sntp_stop();
   }
-  configTime(NTP_GMT_OFFSET, NTP_DAYLIGHT_OFFSET, NTP_SERVER1, NTP_SERVER2);
+  RuntimeConfig& cfg = getRuntimeConfig();
+  configTime(cfg.gmtOffset, cfg.daylightOffset, cfg.ntpServer1, cfg.ntpServer2);
   sntpInitialized = true;
 
   return true;  // 请求已发出，结果通过回调通知
@@ -139,8 +141,9 @@ bool parseCTSCurrentTime(const uint8_t *buf, size_t len) {
 }
 
 void buildCTSLocalTime(uint8_t *buf) {
+  RuntimeConfig& cfg = getRuntimeConfig();
   // Time Zone: UTC offset in 15-min units (int8). UTC+8 = +32
-  buf[0] = (int8_t)(NTP_GMT_OFFSET / 900);
+  buf[0] = (int8_t)(cfg.gmtOffset / 900);
   // DST Offset: 0=standard, 2=+0.5h, 4=+1h, 8=+2h, 255=unknown
-  buf[1] = (NTP_DAYLIGHT_OFFSET == 0) ? 0 : 4;
+  buf[1] = (cfg.daylightOffset == 0) ? 0 : 4;
 }

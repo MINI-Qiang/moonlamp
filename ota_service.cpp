@@ -9,6 +9,7 @@
 
 #include "config.h"       // ← 项目配置（定义 OTA_* 宏），移植时替换为目标项目的配置头
 #include "ota_service.h"
+#include "config_manager.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -24,9 +25,23 @@ static uint8_t otaProgress = 0;
 static OtaUpdateInfo updateInfo;
 static OtaStateCallback stateCallback = nullptr;
 
+// 运行时可调参数 (初始化为编译常量，可通过 config_manager 覆盖)
+static String rtBaseUrl       = OTA_BASE_URL;
+static unsigned long rtCheckInterval = OTA_CHECK_INTERVAL;
+static unsigned long rtFirstDelay    = OTA_FIRST_DELAY;
+
 static unsigned long lastCheckTime = 0;
 static bool firstCheckDone = false;
 static unsigned long bootTime = 0;
+
+// 延迟执行标志（避免在 BLE 回调的 NimBLE 任务栈中执行 HTTPS 操作）
+static volatile bool pendingCheck = false;
+static volatile bool pendingUpdate = false;
+
+// 缓存 WiFi 连接状态（由 loopOtaService 更新，供 BLE 回调判断）
+static volatile bool wifiReady = false;
+
+
 
 // NVS 持久化（跨重启保留更新信息）
 static Preferences otaPrefs;
@@ -128,7 +143,7 @@ static bool isVersionNewer(const String &a, const String &b) {
 static void doCheckUpdate() {
   setState(OTA_CHECKING);
 
-  String url = String(OTA_BASE_URL) + OTA_API_PATH + "/check";
+  String url = rtBaseUrl + OTA_API_PATH + "/check";
 
   // 构造请求 JSON
   JsonDocument reqDoc;
@@ -325,7 +340,7 @@ static void doDownloadAndFlash() {
 
 // ============ 上报更新结果 ============
 static void reportResult(const char* event) {
-  String url = String(OTA_BASE_URL) + OTA_API_PATH + "/report";
+  String url = rtBaseUrl + OTA_API_PATH + "/report";
 
   JsonDocument doc;
   doc["project_id"]   = OTA_PROJECT_ID;
@@ -363,6 +378,12 @@ void initOtaService() {
   firstCheckDone = false;
   lastCheckTime = 0;
 
+  // 从 config_manager 加载运行时配置
+  RuntimeConfig& cfg = getRuntimeConfig();
+  if (strlen(cfg.otaBaseUrl) > 0)  rtBaseUrl = cfg.otaBaseUrl;
+  if (cfg.otaCheckInterval > 0)    rtCheckInterval = cfg.otaCheckInterval;
+  if (cfg.otaFirstDelay > 0)       rtFirstDelay = cfg.otaFirstDelay;
+
   // 尝试从 NVS 恢复上次检查到的更新信息
   loadUpdateInfoFromNVS();
   if (updateInfo.available) {
@@ -382,6 +403,7 @@ void initOtaService() {
 }
 
 void loopOtaService(bool wifiConnected) {
+  wifiReady = wifiConnected;
   // 不在 WiFi 连接状态 或 正在下载时不处理定时逻辑
   if (!wifiConnected) return;
   if (otaState == OTA_DOWNLOADING || otaState == OTA_VERIFYING || 
@@ -389,9 +411,32 @@ void loopOtaService(bool wifiConnected) {
 
   unsigned long now = millis();
 
-  // 首次检查：等待 OTA_FIRST_DELAY 后执行
+  // 处理延迟执行的检查请求
+  if (pendingCheck) {
+    pendingCheck = false;
+    lastCheckTime = millis();
+    firstCheckDone = true;
+    doCheckUpdate();
+    return;
+  }
+
+  // 处理延迟执行的升级请求：保存标志后重启，重启后无 BLE 直接下载
+  if (pendingUpdate) {
+    pendingUpdate = false;
+    Preferences p;
+    p.begin("ota_cfg", false);
+    p.putBool("doUpdate", true);
+    p.end();
+    Serial.println("[OTA] 已设置更新标志，即将重启...");
+    setState(OTA_REBOOTING);
+    delay(500);
+    ESP.restart();
+    return;
+  }
+
+  // 首次检查：等待 rtFirstDelay 后执行
   if (!firstCheckDone) {
-    if (now - bootTime >= OTA_FIRST_DELAY) {
+    if (now - bootTime >= rtFirstDelay) {
       firstCheckDone = true;
       lastCheckTime = now;
       // 如果 NVS 中已有待更新，跳过首次自动检查
@@ -403,7 +448,7 @@ void loopOtaService(bool wifiConnected) {
   }
 
   // 定期检查
-  if (otaState == OTA_IDLE && (now - lastCheckTime >= OTA_CHECK_INTERVAL)) {
+  if (otaState == OTA_IDLE && (now - lastCheckTime >= rtCheckInterval)) {
     lastCheckTime = now;
     doCheckUpdate();
   }
@@ -414,9 +459,13 @@ void otaCheckNow() {
     Serial.println("[OTA] 正在更新中，无法重复检查");
     return;
   }
-  lastCheckTime = millis();
-  firstCheckDone = true;
-  doCheckUpdate();
+  if (!wifiReady) {
+    Serial.println("[OTA] WiFi 未连接，无法检查更新");
+    setError(OTA_ERR_NO_WIFI);
+    return;
+  }
+  // 设置标志，由 loopOtaService() 在主循环中执行（避免 BLE 回调栈溢出）
+  pendingCheck = true;
 }
 
 void otaStartUpdate() {
@@ -429,8 +478,16 @@ void otaStartUpdate() {
     setError(OTA_ERR_DOWNLOAD);
     return;
   }
-  doDownloadAndFlash();
+  if (!wifiReady) {
+    Serial.println("[OTA] WiFi 未连接，无法开始更新");
+    setError(OTA_ERR_NO_WIFI);
+    return;
+  }
+  // 设置标志，由 loopOtaService() 在主循环中执行（避免 BLE 回调栈溢出）
+  pendingUpdate = true;
 }
+
+
 
 void otaCancelUpdate() {
   if (otaState == OTA_DOWNLOADING || otaState == OTA_VERIFYING || otaState == OTA_REBOOTING) {
@@ -475,4 +532,37 @@ void otaConfirmIfNeeded() {
 
   Serial.printf("[OTA] 运行分区: %s (地址: 0x%06X)\n",
                 running->label, (unsigned int)running->address);
+}
+
+// ============ 重启后 OTA 下载 ============
+
+bool otaHasPendingUpdate() {
+  Preferences p;
+  p.begin("ota_cfg", true);
+  bool pending = p.getBool("doUpdate", false);
+  p.end();
+  return pending;
+}
+
+void otaRunPendingUpdate() {
+  // 立即清除标志，防止失败后循环重启
+  Preferences p;
+  p.begin("ota_cfg", false);
+  p.putBool("doUpdate", false);
+  p.end();
+
+  // 初始化 OTA 服务（从 NVS 加载更新信息）
+  initOtaService();
+
+  if (!updateInfo.available || updateInfo.url.isEmpty()) {
+    Serial.println("[OTA] 无有效的更新信息，正常启动");
+    return;
+  }
+
+  Serial.printf("[OTA] 重启后 OTA 模式: %s -> %s\n",
+                OTA_FW_VERSION, updateInfo.version.c_str());
+  Serial.printf("[OTA] 可用堆: %u 字节（无 BLE 开销）\n", ESP.getFreeHeap());
+
+  doDownloadAndFlash();
+  // 成功则 ESP.restart()，失败则 return 由调用方继续正常启动
 }

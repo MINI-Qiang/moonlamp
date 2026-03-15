@@ -24,6 +24,8 @@
 #include "time_effect.h"
 #include "sun_calc.h"
 #include "ota_service.h"
+#include "config_manager.h"
+#include "http_service.h"
 #include <BLEDevice.h>
 #include <WiFiProv.h>
 #include <WiFi.h>
@@ -78,6 +80,44 @@ static void onOtaStateChange(uint8_t state, uint8_t progress) {
     uint8_t buf[2] = { progress, state };
     pCharOtaProgress->setValue(buf, 2);
     pCharOtaProgress->notify();
+  }
+}
+
+// ============ OTA 下载 LED 指示（重启后无 BLE 模式） ============
+static void onOtaLedIndicator(uint8_t state, uint8_t progress) {
+  switch (state) {
+    case OTA_DOWNLOADING: {
+      uint8_t b = map(progress, 0, 100, 30, 255);
+      fill_solid(leds, NUM_LEDS, CHSV(128, 255, b));  // 青色，亮度随进度增加
+      FastLED.show();
+      break;
+    }
+    case OTA_VERIFYING: {
+      // 紫色慢速脉冲
+      uint8_t b = beatsin8(30, 80, 255);
+      fill_solid(leds, NUM_LEDS, CHSV(200, 255, b));
+      FastLED.show();
+      break;
+    }
+    case OTA_READY:
+    case OTA_REBOOTING:
+      fill_solid(leds, NUM_LEDS, CHSV(96, 255, 255));   // 绿色常亮
+      FastLED.show();
+      break;
+    default:
+      if (state >= 0xE0) {
+        // 红色三闪×2: 闪3下-暗-闪3下
+        for (int g = 0; g < 2; g++) {
+          for (int i = 0; i < 3; i++) {
+            fill_solid(leds, NUM_LEDS, CHSV(0, 255, 255));
+            FastLED.show(); delay(120);
+            fill_solid(leds, NUM_LEDS, CRGB::Black);
+            FastLED.show(); delay(120);
+          }
+          delay(300);
+        }
+      }
+      break;
   }
 }
 
@@ -192,10 +232,57 @@ void setup() {
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(255);
 
+  initConfigManager();  // 统一配置管理器 (NVS加载运行时配置)
   initStorage();
   loadSettings();
   initTimeEffect();  // 初始化时间灯效系统
   applyLED();
+
+  // ====== 检查 OTA 重启更新标志 ======
+  if (otaHasPendingUpdate()) {
+    Serial.println("[SYS] 检测到 OTA 更新标志，进入固件下载模式");
+    otaSetStateCallback(onOtaLedIndicator);
+    initWiFiService();
+    // 等待 WiFi 连接（最长 30 秒），需调用 loopWiFiService 驱动状态机
+    unsigned long wifiWait = millis();
+    while (!isWiFiConnected() && millis() - wifiWait < 30000) {
+      loopWiFiService();
+      // 蓝色呼吸灯指示连接中
+      uint8_t b = (millis() / 10) % 512;
+      b = b > 255 ? 511 - b : b;
+      fill_solid(leds, NUM_LEDS, CHSV(160, 255, b));
+      FastLED.show();
+      delay(10);
+    }
+    if (isWiFiConnected()) {
+      otaRunPendingUpdate();
+      // 下载失败：红色三闪×2 提示后继续正常启动
+      for (int g = 0; g < 2; g++) {
+        for (int i = 0; i < 3; i++) {
+          fill_solid(leds, NUM_LEDS, CHSV(0, 255, 255));
+          FastLED.show(); delay(120);
+          fill_solid(leds, NUM_LEDS, CRGB::Black);
+          FastLED.show(); delay(120);
+        }
+        delay(300);
+      }
+      Serial.println("[OTA] 下载失败，继续正常启动");
+    } else {
+      Serial.println("[OTA] WiFi 连接超时，继续正常启动");
+      // 红色三闪×2
+      for (int g = 0; g < 2; g++) {
+        for (int i = 0; i < 3; i++) {
+          fill_solid(leds, NUM_LEDS, CHSV(0, 255, 255));
+          FastLED.show(); delay(120);
+          fill_solid(leds, NUM_LEDS, CRGB::Black);
+          FastLED.show(); delay(120);
+        }
+        delay(300);
+      }
+    }
+    // 恢复正常 LED 状态
+    applyLED();
+  }
 
   // ====== 检查配网标志: 仅在 Web 端主动触发重置后才进入 WiFiProv ======
   {
@@ -233,6 +320,7 @@ void setup() {
   otaSetStateCallback(onOtaStateChange);
   otaConfirmIfNeeded();
   setupBLE();
+  initHttpService();  // HTTP 局域网配置服务 (根据 httpEnabled 决定是否启动)
   if (hasWiFiCredentials()) {
     Serial.println("[SYS] 正常模式 (WiFi已配置)");
   } else {
@@ -320,6 +408,139 @@ static void handleSerialCommand(const String &line) {
     otaCancelUpdate();
     resp["resp"] = "ota_status";
     resp["state"] = getOtaState();
+
+  // ============ 配置管理命令 ============
+  } else if (strcmp(action, "get_config") == 0) {
+    // 直接输出 configToJson 并返回，避免二次序列化
+    Serial.println(configToJson());
+    return;
+
+  } else if (strcmp(action, "set_config") == 0) {
+    // 从请求 JSON 中提取配置字段（排除 cmd）
+    String body;
+    serializeJson(req, body);
+    if (configFromJson(body)) {
+      Serial.println(configToJson());
+    } else {
+      resp["resp"] = "error";
+      resp["msg"] = "no valid config fields";
+    }
+    if (resp.containsKey("resp")) {
+      serializeJson(resp, Serial);
+      Serial.println();
+    }
+    return;
+
+  // ============ LED 状态查询 ============
+  } else if (strcmp(action, "get_led") == 0) {
+    resp["resp"]         = "led_state";
+    resp["power"]        = powerOn;
+    resp["h"]            = currentH;
+    resp["s"]            = currentS;
+    resp["v"]            = currentV;
+    resp["effect_mode"]  = effectMode;
+    resp["effect_speed"] = effectSpeed;
+    resp["effect_param1"]= effectParam1;
+    resp["effect_param2"]= effectParam2;
+
+  // ============ 灯效控制 ============
+  } else if (strcmp(action, "set_effect") == 0) {
+    if (req.containsKey("mode"))   effectMode   = req["mode"];
+    if (req.containsKey("speed"))  effectSpeed  = req["speed"];
+    if (req.containsKey("param1")) effectParam1 = req["param1"];
+    if (req.containsKey("param2")) effectParam2 = req["param2"];
+    needApplyLED = true;
+
+    resp["resp"]         = "effect_ok";
+    resp["effect_mode"]  = effectMode;
+    resp["effect_speed"] = effectSpeed;
+    resp["effect_param1"]= effectParam1;
+    resp["effect_param2"]= effectParam2;
+
+  // ============ WiFi 状态 ============
+  } else if (strcmp(action, "get_wifi") == 0) {
+    resp["resp"]       = "wifi_state";
+    resp["status"]     = getWiFiStatus();
+    resp["ssid"]       = getStoredSSID();
+    resp["connected"]  = isWiFiConnected();
+    resp["power_mode"] = getWiFiPowerMode();
+
+  } else if (strcmp(action, "set_wifi") == 0) {
+    const char* ssid = req["ssid"] | "";
+    const char* pass = req["pass"] | "";
+    if (strlen(ssid) > 0 && setWiFiCredentials(String(ssid), String(pass))) {
+      resp["resp"] = "wifi_ok";
+      resp["ssid"] = ssid;
+    } else {
+      resp["resp"] = "error";
+      resp["msg"]  = "invalid ssid";
+    }
+
+  // ============ 时间灯效配置 ============
+  } else if (strcmp(action, "get_timefx") == 0) {
+    TimeEffectConfig& tfCfg = getTimeEffectConfig();
+    resp["resp"]             = "timefx_config";
+    resp["hue"]              = tfCfg.hue;
+    resp["saturation"]       = tfCfg.saturation;
+    resp["max_brightness"]   = tfCfg.maxBrightness;
+    resp["night_brightness"] = tfCfg.nightBrightness;
+    resp["start_time"]       = tfCfg.startTime;
+    resp["peak_time"]        = tfCfg.peakTime;
+    resp["night_time"]       = tfCfg.nightTime;
+    resp["off_time"]         = tfCfg.offTime;
+    resp["fade_up"]          = tfCfg.fadeUpDuration;
+    resp["fade_down"]        = tfCfg.fadeDownDuration;
+    resp["phase"]            = getTimeEffectPhase();
+    resp["phase_name"]       = getTimeEffectPhaseName();
+
+  } else if (strcmp(action, "set_timefx") == 0) {
+    TimeEffectConfig& tfCfg = getTimeEffectConfig();
+    if (req.containsKey("hue"))              tfCfg.hue = req["hue"];
+    if (req.containsKey("saturation"))       tfCfg.saturation = req["saturation"];
+    if (req.containsKey("max_brightness"))   tfCfg.maxBrightness = req["max_brightness"];
+    if (req.containsKey("night_brightness")) tfCfg.nightBrightness = req["night_brightness"];
+    if (req.containsKey("start_time"))       tfCfg.startTime = req["start_time"];
+    if (req.containsKey("peak_time"))        tfCfg.peakTime = req["peak_time"];
+    if (req.containsKey("night_time"))       tfCfg.nightTime = req["night_time"];
+    if (req.containsKey("off_time"))         tfCfg.offTime = req["off_time"];
+    if (req.containsKey("fade_up"))          tfCfg.fadeUpDuration = req["fade_up"];
+    if (req.containsKey("fade_down"))        tfCfg.fadeDownDuration = req["fade_down"];
+    saveTimeEffectConfig();
+    resp["resp"] = "timefx_ok";
+
+  // ============ HTTP 服务控制 ============
+  } else if (strcmp(action, "set_http") == 0) {
+    RuntimeConfig& rtCfg = getRuntimeConfig();
+    if (req.containsKey("enabled")) rtCfg.httpEnabled = req["enabled"];
+    if (req.containsKey("port"))    rtCfg.httpPort = req["port"];
+    saveRuntimeConfig();
+    resp["resp"]    = "http_ok";
+    resp["enabled"] = rtCfg.httpEnabled;
+    resp["port"]    = rtCfg.httpPort;
+    resp["running"] = isHttpServiceRunning();
+
+  // ============ 设备综合状态 ============
+  } else if (strcmp(action, "get_status") == 0) {
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    resp["resp"]         = "status";
+    resp["mac"]          = macStr;
+    resp["fw_version"]   = OTA_FW_VERSION;
+    resp["hw_version"]   = OTA_HW_VERSION;
+    resp["wifi_status"]  = getWiFiStatus();
+    resp["wifi_ssid"]    = getStoredSSID();
+    resp["time_synced"]  = isTimeSynced();
+    resp["time"]         = getFormattedDateTime();
+    resp["free_heap"]    = ESP.getFreeHeap();
+    resp["uptime_ms"]    = millis();
+    resp["power"]        = powerOn;
+    resp["effect_mode"]  = effectMode;
+    resp["ota_state"]    = getOtaState();
+    resp["http_running"] = isHttpServiceRunning();
+
   } else {
     resp["resp"] = "error";
     resp["msg"] = String("unknown cmd: ") + action;
@@ -383,10 +604,11 @@ void loop() {
   loopWiFiService();
   loopTimeService();
   loopOtaService(isWiFiConnected());
+  loopHttpService();
   syncWiFiTimeCharacteristics();
 
   unsigned long now = millis();
-  if (now - lastSaveCheckTime >= SAVE_CHECK_INTERVAL) {
+  if (now - lastSaveCheckTime >= getRuntimeConfig().saveCheckInterval) {
     lastSaveCheckTime = now;
     saveSettingsIfChanged();
   }

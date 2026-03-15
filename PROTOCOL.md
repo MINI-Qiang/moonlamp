@@ -811,6 +811,625 @@ print(f"MAC: {info['mac']}, PoP: {info['pop']}")
 ESP32 WS2812 BLE灯光控制 + WiFi/NTP
 ========================================
 [LED] 引脚: GPIO8, 数量: 15颗
+[CFG] 运行时配置已加载
 [SYS] 正常模式 (WiFi已配置)
 [SYS] 系统就绪，等待BLE连接...
+```
+
+---
+
+## OTA 远程固件更新
+
+### OTA 服务 UUID
+
+**OTA 服务 UUID:** `0000ff30-0000-1000-8000-00805f9b34fb`
+
+### OTA BLE 特征值一览
+
+| 特征值       | UUID                                           | 属性           | 长度   | 说明               |
+| ------------ | ---------------------------------------------- | -------------- | ------ | ------------------ |
+| OTA Control  | `0000ff31-0000-1000-8000-00805f9b34fb`         | Write / Notify | 1 字节 | 控制命令 & 状态通知 |
+| OTA Info     | `0000ff32-0000-1000-8000-00805f9b34fb`         | Read / Notify  | 变长 JSON | 版本信息 + 更新详情 |
+| OTA Progress | `0000ff33-0000-1000-8000-00805f9b34fb`         | Read / Notify  | 2 字节 | [进度%, 状态码]     |
+
+### OTA 状态码
+
+| 状态码 | 名称           | 说明                   |
+| ------ | -------------- | ---------------------- |
+| 0x00   | IDLE           | 空闲                   |
+| 0x01   | CHECKING       | 正在检查更新           |
+| 0x02   | AVAILABLE      | 有新版本可用           |
+| 0x03   | NO_UPDATE      | 已是最新版本           |
+| 0x04   | DOWNLOADING    | 正在下载固件           |
+| 0x05   | VERIFYING      | 正在校验               |
+| 0x06   | READY          | 校验通过，准备重启     |
+| 0x07   | REBOOTING      | 即将重启               |
+| 0x08   | SUCCESS        | 更新成功（重启后）     |
+| 0xE0   | ERR_HTTP       | HTTP 请求失败          |
+| 0xE1   | ERR_PARSE      | 响应解析失败           |
+| 0xE2   | ERR_DOWNLOAD   | 下载失败               |
+| 0xE3   | ERR_MD5        | MD5 校验失败           |
+| 0xE4   | ERR_FLASH      | 写入 Flash 失败        |
+| 0xE5   | ERR_NO_WIFI    | WiFi 未连接            |
+
+### OTA Control 写入命令
+
+| 命令     | 值     | 说明                 |
+| -------- | ------ | -------------------- |
+| 检查更新 | `0x01` | 手动触发服务器检查   |
+| 确认升级 | `0x02` | 用户确认开始下载     |
+| 取消     | `0x03` | 取消当前操作         |
+
+**通知序列（完整升级）:**
+```
+0x01 (CHECKING) → 0x02 (AVAILABLE) → 0x04 (DOWNLOADING) → 0x05 (VERIFYING) → 0x06 (READY) → 0x07 (REBOOTING)
+```
+
+### OTA Progress 通知
+
+下载过程中每变化 1% Notify，固定 2 字节：
+
+| 字节 | 说明           | 范围   |
+| ---- | -------------- | ------ |
+| [0]  | 下载进度百分比 | 0-100  |
+| [1]  | 当前状态码     | 见状态码表 |
+
+### OTA Info 读取响应
+
+Read 或 Notify 时返回 UTF-8 JSON 字符串：
+
+**有可用更新时:**
+```json
+{"cur":"1.0.0","new":"1.2.0","size":483200,"log":"修复BLE断连；优化灯效","force":false,"state":2}
+```
+
+**无可用更新时:**
+```json
+{"cur":"1.0.0","new":"","state":0}
+```
+
+| 字段    | 类型    | 说明                               |
+| ------- | ------- | ---------------------------------- |
+| `cur`   | string  | 当前固件版本                       |
+| `new`   | string  | 可用新版本（无更新时为空串）       |
+| `size`  | number  | 固件大小(字节)，仅有更新时存在     |
+| `log`   | string  | 更新日志，仅有更新时存在           |
+| `force` | boolean | 是否强制更新，仅有更新时存在       |
+| `state` | number  | 当前 OTA 状态码                    |
+
+### OTA 自动检查逻辑
+
+| 阶段       | 条件                              | 行为                                           |
+| ---------- | --------------------------------- | ---------------------------------------------- |
+| 首次检查   | 启动后等待 OTA_FIRST_DELAY (60s)  | NVS 无待更新 → 检查；有待更新 → 恢复 AVAILABLE |
+| 定期检查   | 距上次 ≥ OTA_CHECK_INTERVAL (24h) | 仅 IDLE 且 WiFi 已连接时触发                   |
+| 跳过       | 正在下载/校验/重启中              | 直接 return                                    |
+
+### OTA 启动回滚保护
+
+新固件写入后首次启动，`otaConfirmIfNeeded()` 调用 `esp_ota_mark_app_valid_cancel_rollback()` 确认分区有效。若新固件崩溃无法走到确认，ESP32 bootloader 自动回滚到上一个有效分区。
+
+### OTA BLE 完整交互序列
+
+```
+客户端 (Web/App)                        ESP32 设备
+     │                                      │
+     │── Write OTA Ctrl: 0x01 ──────────>│  手动检查更新
+     │                                      │── POST /api/v1/ota/check ──> Worker
+     │<── Notify OTA Ctrl: 0x01 ─────────│  (CHECKING)
+     │                                      │<── 200 { update: true } ──── Worker
+     │<── Notify OTA Ctrl: 0x02 ─────────│  (AVAILABLE)
+     │                                      │
+     │── Read OTA Info ─────────────────>│
+     │<── { cur, new, size, log, ... } ──│  读取更新详情
+     │                                      │
+     │── Write OTA Ctrl: 0x02 ──────────>│  确认开始升级
+     │<── Notify OTA Ctrl: 0x04 ─────────│  (DOWNLOADING)
+     │<── Notify Progress: [1%, 0x04] ───│
+     │         ... 每变化1%通知 ...        │
+     │<── Notify Progress: [100%, 0x04] ─│
+     │<── Notify OTA Ctrl: 0x05 ─────────│  (VERIFYING)
+     │<── Notify OTA Ctrl: 0x07 ─────────│  (REBOOTING)
+     │         ... BLE 断开，设备重启 ...   │
+```
+
+---
+
+## OTA 串口命令
+
+#### `ota_check` — 手动检查更新
+
+**请求:**
+```json
+{"cmd":"ota_check"}
+```
+
+**响应:**
+```json
+{"resp":"ota_status","state":2,"cur":"1.0.0","new":"1.2.0","size":483200}
+```
+
+#### `ota_update` — 确认开始升级
+
+**请求:**
+```json
+{"cmd":"ota_update"}
+```
+
+**响应:**
+```json
+{"resp":"ota_status","state":4,"progress":0}
+```
+
+#### `ota_status` — 查询 OTA 状态
+
+**请求:**
+```json
+{"cmd":"ota_status"}
+```
+
+**响应（无更新）:**
+```json
+{"resp":"ota_status","state":0,"progress":0,"cur":"1.0.0"}
+```
+
+**响应（有可用更新）:**
+```json
+{"resp":"ota_status","state":2,"progress":0,"cur":"1.0.0","new":"1.2.0","size":483200,"changelog":"修复BLE断连"}
+```
+
+#### `ota_cancel` — 取消操作
+
+**请求:**
+```json
+{"cmd":"ota_cancel"}
+```
+
+**响应:**
+```json
+{"resp":"ota_status","state":0}
+```
+
+---
+
+## 系统配置串口命令
+
+### 统一运行时配置
+
+设备支持通过串口/HTTP 实时修改系统配置参数，修改后持久化到 NVS，重启后保持。
+
+#### `get_config` — 获取运行时配置
+
+**请求:**
+```json
+{"cmd":"get_config"}
+```
+
+**响应:**
+```json
+{
+  "ntp_server1":"ntp.aliyun.com",
+  "ntp_server2":"time.nist.gov",
+  "ntp_gmt_offset":28800,
+  "ntp_daylight_offset":0,
+  "device_prefix":"OAKIOT",
+  "save_check_interval":300000,
+  "ota_base_url":"https://ota.iot.oakiot.cc",
+  "ota_check_interval":86400000,
+  "ota_first_delay":60000,
+  "ota_project_id":"oakiot",
+  "ota_product_id":"moon-light",
+  "ota_fw_version":"1.0.1",
+  "ota_hw_version":"esp32c3-v1",
+  "http_enabled":false,
+  "http_port":80
+}
+```
+
+| 字段                   | 类型    | 可写 | 说明                           |
+| ---------------------- | ------- | ---- | ------------------------------ |
+| `ntp_server1`          | string  | 是   | NTP 服务器 1                   |
+| `ntp_server2`          | string  | 是   | NTP 服务器 2                   |
+| `ntp_gmt_offset`       | number  | 是   | UTC 偏移 (秒)，28800=UTC+8     |
+| `ntp_daylight_offset`  | number  | 是   | 夏令时偏移 (秒)                |
+| `device_prefix`        | string  | 是   | BLE 广播名前缀 (重启后生效)    |
+| `save_check_interval`  | number  | 是   | NVS 定时保存间隔 (ms)          |
+| `ota_base_url`         | string  | 是   | OTA 服务器地址 (重启后生效)    |
+| `ota_check_interval`   | number  | 是   | OTA 自动检查间隔 (ms)          |
+| `ota_first_delay`      | number  | 是   | OTA 首次检查延迟 (ms)          |
+| `ota_project_id`       | string  | 否   | 项目标识 (编译时常量)          |
+| `ota_product_id`       | string  | 否   | 产品标识 (编译时常量)          |
+| `ota_fw_version`       | string  | 否   | 固件版本 (编译时常量)          |
+| `ota_hw_version`       | string  | 否   | 硬件版本 (编译时常量)          |
+| `http_enabled`         | boolean | 是   | HTTP 服务开关                  |
+| `http_port`            | number  | 是   | HTTP 服务端口                  |
+
+#### `set_config` — 修改运行时配置
+
+仅需传入要修改的字段，其他字段保持不变。修改后自动持久化到 NVS。
+
+**请求示例（修改 NTP 服务器和时区）:**
+```json
+{"cmd":"set_config","ntp_server1":"pool.ntp.org","ntp_gmt_offset":32400}
+```
+
+**响应:** 返回完整配置 JSON（同 get_config）。
+
+**请求示例（开启 HTTP 服务）:**
+```json
+{"cmd":"set_config","http_enabled":true,"http_port":80}
+```
+
+> **注意:** 部分配置修改需要重启才能完全生效（如 device_prefix 影响 BLE 广播名，ota_base_url 影响 OTA 检查）。
+
+### 全量状态查询
+
+#### `get_status` — 获取设备综合状态
+
+**请求:**
+```json
+{"cmd":"get_status"}
+```
+
+**响应:**
+```json
+{
+  "resp":"status",
+  "mac":"AA:BB:CC:DD:EE:FF",
+  "fw_version":"1.0.1",
+  "hw_version":"esp32c3-v1",
+  "wifi_status":2,
+  "wifi_ssid":"MyWiFi",
+  "time_synced":true,
+  "time":"Sun, Jan 17 2026 15:24:38",
+  "free_heap":120000,
+  "uptime_ms":3600000,
+  "power":true,
+  "effect_mode":0,
+  "ota_state":0,
+  "http_running":true
+}
+```
+
+### LED 与灯效控制
+
+#### `get_led` — 获取 LED 状态
+
+**请求:**
+```json
+{"cmd":"get_led"}
+```
+
+**响应:**
+```json
+{"resp":"led_state","power":true,"h":0,"s":255,"v":128,"effect_mode":0,"effect_speed":128,"effect_param1":128,"effect_param2":128}
+```
+
+#### `set_effect` — 设置灯效模式/参数
+
+**请求:**
+```json
+{"cmd":"set_effect","mode":100,"speed":200,"param1":128}
+```
+
+| 字段     | 类型  | 必填 | 说明               |
+| -------- | ----- | ---- | ------------------ |
+| `mode`   | uint8 | 否   | 灯效模式 (0,1,100-111) |
+| `speed`  | uint8 | 否   | 灯效速度 0-255     |
+| `param1` | uint8 | 否   | 灯效参数1 0-255    |
+| `param2` | uint8 | 否   | 灯效参数2 0-255    |
+
+**响应:**
+```json
+{"resp":"effect_ok","effect_mode":100,"effect_speed":200,"effect_param1":128,"effect_param2":128}
+```
+
+### WiFi 管理
+
+#### `get_wifi` — 获取 WiFi 状态
+
+**请求:**
+```json
+{"cmd":"get_wifi"}
+```
+
+**响应:**
+```json
+{"resp":"wifi_state","status":2,"ssid":"MyWiFi","connected":true,"power_mode":2}
+```
+
+#### `set_wifi` — 设置 WiFi 凭据
+
+**请求:**
+```json
+{"cmd":"set_wifi","ssid":"MyWiFi","pass":"12345678"}
+```
+
+**响应:**
+```json
+{"resp":"wifi_ok","ssid":"MyWiFi"}
+```
+
+### 时间灯效配置
+
+#### `get_timefx` — 获取时间灯效配置
+
+**请求:**
+```json
+{"cmd":"get_timefx"}
+```
+
+**响应:**
+```json
+{
+  "resp":"timefx_config",
+  "hue":206,"saturation":0,"max_brightness":255,"night_brightness":30,
+  "start_time":-1,"peak_time":1260,"night_time":1290,"off_time":-1,
+  "fade_up":0,"fade_down":30,"phase":0,"phase_name":"白天关闭"
+}
+```
+
+#### `set_timefx` — 修改时间灯效配置
+
+仅需传入要修改的字段。
+
+**请求:**
+```json
+{"cmd":"set_timefx","max_brightness":200,"night_brightness":50}
+```
+
+**响应:**
+```json
+{"resp":"timefx_ok"}
+```
+
+### HTTP 服务控制
+
+#### `set_http` — 开启/关闭 HTTP 服务
+
+**请求（开启）:**
+```json
+{"cmd":"set_http","enabled":true,"port":80}
+```
+
+**响应:**
+```json
+{"resp":"http_ok","enabled":true,"port":80,"running":true}
+```
+
+**请求（关闭）:**
+```json
+{"cmd":"set_http","enabled":false}
+```
+
+---
+
+## HTTP 局域网 API
+
+设备支持通过 HTTP RESTful API 在局域网内进行配置和控制，默认关闭，需通过串口或 BLE 主动开启。
+
+### 启用方式
+
+串口命令:
+```json
+{"cmd":"set_http","enabled":true,"port":80}
+```
+
+或通过 `set_config`:
+```json
+{"cmd":"set_config","http_enabled":true,"http_port":80}
+```
+
+### 通用说明
+
+| 参数         | 说明                                    |
+| ------------ | --------------------------------------- |
+| 默认端口     | 80                                      |
+| Content-Type | application/json                        |
+| CORS         | 允许所有来源 (`Access-Control-Allow-Origin: *`) |
+| 认证         | 无（仅限局域网使用）                    |
+
+### 端点列表
+
+| 方法 | 路径              | 说明               |
+| ---- | ----------------- | ------------------ |
+| GET  | /api/status       | 设备综合状态       |
+| GET  | /api/config       | 运行时配置         |
+| PUT  | /api/config       | 修改配置           |
+| GET  | /api/led          | LED 灯光状态       |
+| PUT  | /api/led          | 设置灯光           |
+| GET  | /api/effect       | 灯效模式与参数     |
+| PUT  | /api/effect       | 设置灯效           |
+| GET  | /api/timefx       | 时间灯效配置       |
+| PUT  | /api/timefx       | 设置时间灯效       |
+| GET  | /api/wifi         | WiFi 连接状态      |
+| GET  | /api/ota          | OTA 状态           |
+| POST | /api/ota/check    | 手动检查更新       |
+| POST | /api/ota/update   | 确认升级           |
+| POST | /api/ota/cancel   | 取消更新           |
+
+### GET /api/status
+
+返回设备综合状态（MAC、版本、WiFi、时间、LED、堆内存等）。
+
+**响应示例:**
+```json
+{
+  "mac":"AA:BB:CC:DD:EE:FF",
+  "fw_version":"1.0.1",
+  "hw_version":"esp32c3-v1",
+  "project_id":"oakiot",
+  "product_id":"moon-light",
+  "wifi_status":2,
+  "wifi_ssid":"MyWiFi",
+  "time_synced":true,
+  "time":"Sun, Mar 15 2026 15:24:38",
+  "free_heap":120000,
+  "uptime_ms":3600000,
+  "power":true,
+  "h":0,"s":255,"v":128,
+  "effect_mode":0,
+  "ota_state":0,
+  "ota_progress":0
+}
+```
+
+### GET /api/config
+
+返回运行时配置（同串口 `get_config`）。
+
+### PUT /api/config
+
+修改运行时配置。请求体为 JSON，仅需包含要修改的字段。
+
+**请求示例:**
+```
+PUT /api/config
+Content-Type: application/json
+
+{"ntp_server1":"pool.ntp.org","ntp_gmt_offset":32400}
+```
+
+**响应:** 返回完整配置 JSON。
+
+### GET /api/led
+
+**响应:**
+```json
+{"power":true,"h":0,"s":255,"v":128,"effect_mode":0,"effect_speed":128,"effect_param1":128,"effect_param2":128}
+```
+
+### PUT /api/led
+
+设置灯光参数（支持部分字段）。
+
+**请求:**
+```json
+{"power":true,"h":96,"s":255,"v":200}
+```
+
+### GET /api/effect
+
+**响应:**
+```json
+{"effect_mode":100,"effect_speed":128,"effect_param1":128,"effect_param2":128}
+```
+
+### PUT /api/effect
+
+**请求:**
+```json
+{"effect_mode":100,"effect_speed":200}
+```
+
+### GET /api/timefx
+
+**响应:**
+```json
+{
+  "hue":206,"saturation":0,"max_brightness":255,"night_brightness":30,
+  "start_time":-1,"peak_time":1260,"night_time":1290,"off_time":-1,
+  "fade_up":0,"fade_down":30,"phase":0,"phase_name":"白天关闭"
+}
+```
+
+### PUT /api/timefx
+
+**请求:**
+```json
+{"max_brightness":200,"night_brightness":50}
+```
+
+### GET /api/wifi
+
+**响应:**
+```json
+{"status":2,"ssid":"MyWiFi","connected":true,"power_mode":2}
+```
+
+### GET /api/ota
+
+**响应:**
+```json
+{"state":0,"progress":0,"cur":"1.0.1"}
+```
+
+有可用更新时:
+```json
+{"state":2,"progress":0,"cur":"1.0.1","new":"1.2.0","size":483200,"changelog":"修复BLE断连","force":false}
+```
+
+### POST /api/ota/check
+
+手动触发检查更新。响应同 GET /api/ota。
+
+### POST /api/ota/update
+
+确认开始升级。响应同 GET /api/ota。
+
+### POST /api/ota/cancel
+
+取消更新。响应同 GET /api/ota。
+
+### 智能家居集成示例
+
+#### curl 命令行
+
+```bash
+# 查询设备状态
+curl http://192.168.1.100/api/status
+
+# 开灯设为暖白
+curl -X PUT http://192.168.1.100/api/led \
+  -H "Content-Type: application/json" \
+  -d '{"power":true,"h":30,"s":180,"v":255}'
+
+# 设置呼吸灯效
+curl -X PUT http://192.168.1.100/api/effect \
+  -H "Content-Type: application/json" \
+  -d '{"effect_mode":100,"effect_speed":80}'
+
+# 检查固件更新
+curl -X POST http://192.168.1.100/api/ota/check
+```
+
+#### Python (Home Assistant 集成)
+
+```python
+import requests
+
+DEVICE_IP = "192.168.1.100"
+
+# 获取设备状态
+status = requests.get(f"http://{DEVICE_IP}/api/status").json()
+print(f"版本: {status['fw_version']}, 灯: {'开' if status['power'] else '关'}")
+
+# 控制灯光
+requests.put(f"http://{DEVICE_IP}/api/led",
+             json={"power": True, "h": 0, "s": 255, "v": 200})
+
+# 修改NTP服务器
+requests.put(f"http://{DEVICE_IP}/api/config",
+             json={"ntp_server1": "pool.ntp.org"})
+```
+
+---
+
+## 配置渠道对比
+
+| 配置项           | BLE         | 串口          | HTTP          |
+| ---------------- | ----------- | ------------- | ------------- |
+| LED HSV/开关     | 0xff01/02   | set_led       | PUT /api/led  |
+| 灯效模式/参数    | 0xff03/04   | set_effect    | PUT /api/effect |
+| 时间灯效         | 0xff05      | set_timefx    | PUT /api/timefx |
+| WiFi 凭据        | 0xff11      | set_wifi      | —             |
+| WiFi 状态        | 0xff12      | get_wifi      | GET /api/wifi |
+| 时间同步         | 0xff21/2A2B | —             | —             |
+| NTP/时区配置     | —           | set_config    | PUT /api/config |
+| 设备前缀         | —           | set_config    | PUT /api/config |
+| 存储间隔         | —           | set_config    | PUT /api/config |
+| OTA URL/间隔     | —           | set_config    | PUT /api/config |
+| OTA 检查/升级    | 0xff31      | ota_check等   | POST /api/ota/* |
+| HTTP 服务开关    | —           | set_http      | PUT /api/config |
+| 设备信息         | OTA Info    | get_device_info | GET /api/status |
 ```
